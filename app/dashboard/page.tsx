@@ -3,6 +3,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { TrendingUp, TrendingDown, Users, Clock, ArrowUpRight, ArrowDownRight, MoreHorizontal } from "lucide-react"
+import type { Metadata } from "next"
+
+export const metadata: Metadata = {
+  title: "Dashboard Overview | Eddix Admin",
+  description:
+    "Monitor key financial metrics, track contributions and withdrawals, view recent activity, and manage your Eddix Savings platform from a centralized dashboard.",
+}
 
 const stats = [
   {
