@@ -83,7 +83,7 @@ const notifications = [
   },
 ]
 
-export default function NotificationsPage() {
+export default function NotificationsClient() {
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("all")
   const [filterPriority, setFilterPriority] = useState("all")
