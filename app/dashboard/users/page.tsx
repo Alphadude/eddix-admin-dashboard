@@ -10,107 +10,196 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Search, Filter, MoreHorizontal, Eye, Ban, CheckCircle, UserPlus } from "lucide-react"
-import { useState } from "react"
+import { Search, Filter, MoreHorizontal, Eye, Ban, CheckCircle, UserPlus, Loader2 } from "lucide-react"
+import { useState, useEffect } from "react"
+import { db } from "@/lib/firebase_config"
+import { collection, onSnapshot, query, orderBy, Timestamp, getDocs, where } from "firebase/firestore"
+import { formatDistanceToNow } from "date-fns"
 
-const users = [
-  {
-    id: 1,
-    name: "John Doe",
-    email: "john.doe@email.com",
-    phone: "+234 801 234 5678",
-    balance: "₦125,000",
-    frequency: "Weekly",
-    status: "active",
-    joinDate: "2024-01-15",
-    lastActivity: "2 hours ago",
-  },
-  {
-    id: 2,
-    name: "Sarah Johnson",
-    email: "sarah.j@email.com",
-    phone: "+234 802 345 6789",
-    balance: "₦89,500",
-    frequency: "Monthly",
-    status: "active",
-    joinDate: "2024-02-20",
-    lastActivity: "1 day ago",
-  },
-  {
-    id: 3,
-    name: "Michael Brown",
-    email: "m.brown@email.com",
-    phone: "+234 803 456 7890",
-    balance: "₦0",
-    frequency: "Bi-weekly",
-    status: "suspended",
-    joinDate: "2024-01-08",
-    lastActivity: "1 week ago",
-  },
-  {
-    id: 4,
-    name: "Emily Davis",
-    email: "emily.davis@email.com",
-    phone: "+234 804 567 8901",
-    balance: "₦234,750",
-    frequency: "Weekly",
-    status: "active",
-    joinDate: "2024-03-10",
-    lastActivity: "5 minutes ago",
-  },
-  {
-    id: 5,
-    name: "David Wilson",
-    email: "d.wilson@email.com",
-    phone: "+234 805 678 9012",
-    balance: "₦67,200",
-    frequency: "Monthly",
-    status: "active",
-    joinDate: "2024-02-28",
-    lastActivity: "3 hours ago",
-  },
-]
+interface User {
+  uid: string
+  firstName: string
+  lastName: string
+  email: string
+  initialBalance: number
+  phoneNumber: string
+  status: string
+  isVerified: boolean
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  verificationCode?: string
+  verificationCodeExpiry?: Timestamp
+}
 
 export default function UsersPage() {
   const [searchTerm, setSearchTerm] = useState("")
-  const [selectedUser, setSelectedUser] = useState<(typeof users)[0] | null>(null)
+  const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [showAddUser, setShowAddUser] = useState(false)
+  const [users, setUsers] = useState<User[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loading2, setLoading2] = useState(true)
   const [newUser, setNewUser] = useState({
-    name: "",
+    firstName: "",
+    lastName: "",
     email: "",
-    phone: "",
-    frequency: "weekly",
-    initialBalance: "",
+    phoneNumber: ""
   })
+  const fetchUserSavingsBalance = async (uid: string) => {
+    try {
+      if (!db) {
+        console.error("Firebase not initialized")
+        return 0
+      }
+
+      const savingsRef = collection(db, "savings")
+      const q = query(savingsRef, where("userId", "==", uid))
+
+      const savingsSnapshot = await getDocs(q)
+
+      let totalBalance = 0
+
+      savingsSnapshot.forEach((doc) => {
+        const data = doc.data()
+        totalBalance += data.actualAmount || 0
+      })
+
+      return totalBalance
+    } catch (error) {
+      console.error("Error fetching savings balance:", error)
+      return 0
+    }
+  }
+  const fetchUsers = async () => {
+    try {
+      setLoading(true)
+
+      if (!db) {
+        console.error("Firebase not initialized")
+        setLoading(false)
+        return
+      }
+
+      const usersRef = collection(db, "users");
+      const usersSnapshot = await getDocs(usersRef);
+
+      const usersData = await Promise.all(
+        usersSnapshot.docs.map(async (doc: any) => {
+          const userData = doc.data()
+          const savingsBalance = await fetchUserSavingsBalance(doc.id)
+          return {
+            id: doc.id,
+            ...userData,
+            initialBalance: savingsBalance,
+          }
+        })
+      ) as User[]
+
+      console.log("usersData", usersData)
+      setUsers(usersData)
+      setLoading(false)
+
+    } catch (error) {
+      console.error("Error fetching users:", error)
+      setLoading(false)
+    }
+  }
+  // Fetch users from Firebase
+  useEffect(() => {
+    fetchUsers()
+  }, [])
+
+  // Calculate stats from real data
+  const totalUsers = users.length
+  const activeUsers = users.filter(u => u.status === "active").length
+  const suspendedUsers = users.filter(u => u.status === "suspended").length
+  const newThisMonth = users.filter(u => {
+    const createdDate = u.createdAt?.toDate()
+    if (!createdDate) return false
+    const now = new Date()
+    return createdDate.getMonth() === now.getMonth() &&
+      createdDate.getFullYear() === now.getFullYear()
+  }).length
 
   const filteredUsers = users.filter(
-    (user) =>
-      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.phone.includes(searchTerm),
+    (user) => {
+      const fullName = `${user.firstName} ${user.lastName}`.toLowerCase()
+      const search = searchTerm.toLowerCase()
+      return fullName.includes(search) ||
+        user.email.toLowerCase().includes(search) ||
+        user.phoneNumber.includes(searchTerm)
+    }
   )
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "active":
-        return <Badge className="bg-success/10 text-success border-success/20">Active</Badge>
-      case "suspended":
-        return <Badge variant="destructive">Suspended</Badge>
-      default:
-        return <Badge variant="outline">{status}</Badge>
+    if (status === "active") {
+      return <Badge className="bg-success/10 text-success border-success/20">Active</Badge>
+    } else {
+      return <Badge variant="destructive">Suspended</Badge>
     }
   }
 
-  const handleAddUser = () => {
-    console.log("[v0] Adding new user:", newUser)
-    setShowAddUser(false)
-    setNewUser({
-      name: "",
-      email: "",
-      phone: "",
-      frequency: "weekly",
-      initialBalance: "",
-    })
+  const formatLastActivity = (updatedAt: Timestamp) => {
+    try {
+      return formatDistanceToNow(updatedAt.toDate(), { addSuffix: true })
+    } catch {
+      return "Unknown"
+    }
+  }
+
+  const handleAddUser = async () => {
+    if (!newUser.firstName || !newUser.lastName || !newUser.email || !newUser.phoneNumber) {
+      alert("Please fill in all fields")
+      return
+    }
+
+    if (!newUser.phoneNumber.startsWith("+")) {
+      alert("Phone number must start with a plus sign (+)")
+      return
+    }
+
+    if (!newUser.phoneNumber.startsWith("+234")) {
+      alert("Phone number must start with +234")
+      return
+    }
+
+    try {
+      setLoading2(true) // Re-using loading state or create a specific one if preferred
+
+      const response = await fetch("/api/users/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(newUser),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create user")
+      }
+
+      console.log("User created successfully:", data)
+
+      // Reset form and close dialog
+      setNewUser({
+        firstName: "",
+        lastName: "",
+        email: "",
+        phoneNumber: ""
+      })
+      setShowAddUser(false)
+
+      await fetchUsers()
+      // The onSnapshot listener in useEffect will automatically pick up the new user!
+      // But we can trigger a manual fetch if needed, though onSnapshot is best.
+
+    } catch (error: any) {
+      console.error("Error creating user:", error)
+      alert(error.message)
+    } finally {
+      setLoading2(false)
+    }
   }
 
   return (
@@ -129,8 +218,7 @@ export default function UsersPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Total Users</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">1,847</div>
-              <div className="text-xs text-success">+47 this week</div>
+              <div className="text-2xl font-bold">{loading ? <Loader2 className="h-6 w-6 animate-spin" /> : totalUsers.toLocaleString()}</div>
             </CardContent>
           </Card>
           <Card>
@@ -138,8 +226,7 @@ export default function UsersPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Active Users</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">1,823</div>
-              <div className="text-xs text-muted-foreground">98.7% active rate</div>
+              <div className="text-2xl font-bold">{loading ? <Loader2 className="h-6 w-6 animate-spin" /> : activeUsers.toLocaleString()}</div>
             </CardContent>
           </Card>
           <Card>
@@ -147,8 +234,7 @@ export default function UsersPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Suspended</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">24</div>
-              <div className="text-xs text-destructive">-3 from last week</div>
+              <div className="text-2xl font-bold">{loading ? <Loader2 className="h-6 w-6 animate-spin" /> : suspendedUsers.toLocaleString()}</div>
             </CardContent>
           </Card>
           <Card>
@@ -156,8 +242,7 @@ export default function UsersPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">New This Month</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">156</div>
-              <div className="text-xs text-success">+12% vs last month</div>
+              <div className="text-2xl font-bold">{loading ? <Loader2 className="h-6 w-6 animate-spin" /> : newThisMonth.toLocaleString()}</div>
             </CardContent>
           </Card>
         </div>
@@ -198,59 +283,78 @@ export default function UsersPage() {
                   <TableHead>User</TableHead>
                   <TableHead>Contact</TableHead>
                   <TableHead>Balance</TableHead>
-                  <TableHead>Frequency</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Last Activity</TableHead>
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredUsers.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell>
-                      <div>
-                        <div className="font-medium">{user.name}</div>
-                        <div className="text-sm text-muted-foreground">ID: {user.id}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        <div className="text-sm">{user.email}</div>
-                        <div className="text-sm text-muted-foreground">{user.phone}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-medium">{user.balance}</TableCell>
-                    <TableCell>{user.frequency}</TableCell>
-                    <TableCell>{getStatusBadge(user.status)}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{user.lastActivity}</TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => setSelectedUser(user)}>
-                            <Eye className="h-4 w-4 mr-2" />
-                            View Profile
-                          </DropdownMenuItem>
-                          {user.status === "active" ? (
-                            <DropdownMenuItem className="text-destructive">
-                              <Ban className="h-4 w-4 mr-2" />
-                              Suspend User
-                            </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem className="text-success">
-                              <CheckCircle className="h-4 w-4 mr-2" />
-                              Activate User
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-10">
+                      <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground mt-2">Loading users...</p>
                     </TableCell>
                   </TableRow>
-                ))}
+                ) : filteredUsers.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-10">
+                      <p className="text-sm text-muted-foreground">No users found</p>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredUsers.map((user) => (
+                    <TableRow key={user.uid}>
+                      <TableCell>
+                        <div>
+                          <div className="font-medium">{user.firstName} {user.lastName}</div>
+                          <div className="text-sm text-muted-foreground">ID: {user.uid.substring(0, 8)}...</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div>
+                          <div className="text-sm">{user.email}</div>
+                          <div className="text-sm text-muted-foreground">{user.phoneNumber}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        ₦
+                        {Number(user.initialBalance || 0).toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </TableCell>
+                      <TableCell>{getStatusBadge(user.status)}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{formatLastActivity(user.updatedAt)}</TableCell>
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setSelectedUser(user)}>
+                              <Eye className="h-4 w-4 mr-2" />
+                              View Profile
+                            </DropdownMenuItem>
+                            {user.isVerified ? (
+                              <DropdownMenuItem className="text-destructive">
+                                <Ban className="h-4 w-4 mr-2" />
+                                Suspend User
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem className="text-success">
+                                <CheckCircle className="h-4 w-4 mr-2" />
+                                Activate User
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </CardContent>
@@ -268,7 +372,7 @@ export default function UsersPage() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label>Full Name</Label>
-                    <div className="text-sm font-medium">{selectedUser.name}</div>
+                    <div className="text-sm font-medium">{selectedUser.firstName} {selectedUser.lastName}</div>
                   </div>
                   <div className="space-y-2">
                     <Label>Account Status</Label>
@@ -280,23 +384,24 @@ export default function UsersPage() {
                   </div>
                   <div className="space-y-2">
                     <Label>Phone Number</Label>
-                    <div className="text-sm">{selectedUser.phone}</div>
+                    <div className="text-sm">{selectedUser.phoneNumber}</div>
                   </div>
                   <div className="space-y-2">
-                    <Label>Current Balance</Label>
-                    <div className="text-lg font-semibold">{selectedUser.balance}</div>
+                    <Label>User ID</Label>
+                    <div className="text-sm font-mono">{selectedUser.uid}</div>
                   </div>
+
                   <div className="space-y-2">
-                    <Label>Savings Frequency</Label>
-                    <div className="text-sm">{selectedUser.frequency}</div>
+                    <Label>Verified</Label>
+                    <div className="text-sm">{selectedUser.isVerified ? "Yes" : "No"}</div>
                   </div>
                   <div className="space-y-2">
                     <Label>Join Date</Label>
-                    <div className="text-sm">{selectedUser.joinDate}</div>
+                    <div className="text-sm">{selectedUser.createdAt?.toDate().toLocaleDateString()}</div>
                   </div>
                   <div className="space-y-2">
                     <Label>Last Activity</Label>
-                    <div className="text-sm">{selectedUser.lastActivity}</div>
+                    <div className="text-sm">{formatLastActivity(selectedUser.updatedAt)}</div>
                   </div>
                 </div>
 
@@ -337,7 +442,7 @@ export default function UsersPage() {
                   <Button variant="outline" className="flex-1 bg-transparent">
                     Send Message
                   </Button>
-                  {selectedUser.status === "active" ? (
+                  {selectedUser.isVerified ? (
                     <Button variant="destructive" className="flex-1">
                       <Ban className="h-4 w-4 mr-2" />
                       Suspend Account
@@ -363,12 +468,21 @@ export default function UsersPage() {
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
+                <Label htmlFor="firstName">First Name</Label>
                 <Input
-                  id="name"
-                  placeholder="Enter full name"
-                  value={newUser.name}
-                  onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                  id="firstName"
+                  placeholder="Enter first name"
+                  value={newUser.firstName}
+                  onChange={(e) => setNewUser({ ...newUser, firstName: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="lastName">Last Name</Label>
+                <Input
+                  id="lastName"
+                  placeholder="Enter last name"
+                  value={newUser.lastName}
+                  onChange={(e) => setNewUser({ ...newUser, lastName: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
@@ -386,35 +500,8 @@ export default function UsersPage() {
                 <Input
                   id="phone"
                   placeholder="+234 800 000 0000"
-                  value={newUser.phone}
-                  onChange={(e) => setNewUser({ ...newUser, phone: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="frequency">Savings Frequency</Label>
-                <Select
-                  value={newUser.frequency}
-                  onValueChange={(value) => setNewUser({ ...newUser, frequency: value })}
-                >
-                  <SelectTrigger id="frequency">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="daily">Daily</SelectItem>
-                    <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="bi-weekly">Bi-weekly</SelectItem>
-                    <SelectItem value="monthly">Monthly</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="balance">Initial Balance (Optional)</Label>
-                <Input
-                  id="balance"
-                  type="number"
-                  placeholder="0"
-                  value={newUser.initialBalance}
-                  onChange={(e) => setNewUser({ ...newUser, initialBalance: e.target.value })}
+                  value={newUser.phoneNumber}
+                  onChange={(e) => setNewUser({ ...newUser, phoneNumber: e.target.value })}
                 />
               </div>
             </div>
@@ -425,7 +512,7 @@ export default function UsersPage() {
               <Button
                 className="flex-1"
                 onClick={handleAddUser}
-                disabled={!newUser.name || !newUser.email || !newUser.phone}
+                disabled={!newUser.firstName || !newUser.lastName || !newUser.email || !newUser.phoneNumber}
               >
                 Add User
               </Button>
