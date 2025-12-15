@@ -13,8 +13,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Search, Filter, MoreHorizontal, Eye, Ban, CheckCircle, UserPlus, Loader2 } from "lucide-react"
 import { useState, useEffect } from "react"
 import { db } from "@/lib/firebase_config"
-import { collection, onSnapshot, query, orderBy, Timestamp, getDocs, where } from "firebase/firestore"
+import { collection, onSnapshot, query, orderBy, Timestamp, getDocs, where, limit, serverTimestamp, updateDoc, doc } from "firebase/firestore"
 import { formatDistanceToNow } from "date-fns"
+import { toast, Toaster } from "react-hot-toast"
+
 
 interface User {
   uid: string
@@ -31,19 +33,29 @@ interface User {
   verificationCodeExpiry?: Timestamp
 }
 
+interface ICTransaction {
+  id: string;
+  description: string;
+  amount: number;
+  createdAt: Timestamp;
+}
+
 export default function UsersPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
   const [showAddUser, setShowAddUser] = useState(false)
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
-  const [loading2, setLoading2] = useState(true)
+  const [loading2, setLoading2] = useState(false)
   const [newUser, setNewUser] = useState({
     firstName: "",
     lastName: "",
     email: "",
     phoneNumber: ""
   })
+  // Fetch recent transactions for selected user
+  const [recentContributions, setRecentContributions] = useState<ICTransaction[]>([])
+  const [withdrawalHistory, setWithdrawalHistory] = useState<ICTransaction[]>([])
   const fetchUserSavingsBalance = async (uid: string) => {
     try {
       if (!db) {
@@ -146,24 +158,79 @@ export default function UsersPage() {
     }
   }
 
+
+  const fetchUserTransactions = async (
+    uid: string,
+    type: "credit" | "debit",
+    limitCount = 2
+  ) => {
+    try {
+      const q = query(
+        collection(db, "transactions"),
+        where("userId", "==", uid),
+        where("type", "==", type),
+        orderBy("createdAt", "desc"),
+        limit(limitCount)
+      )
+
+      const snapshot = await getDocs(q)
+
+      return snapshot.docs.map(doc => {
+        const data = doc.data()
+        return {
+          id: doc.id,
+          description: data.description || "",
+          amount: data.amount || 0,
+          createdAt: data.createdAt,
+        }
+      })
+    } catch (error: any) {
+      console.error(`Error fetching ${type} transactions:`, error)
+
+      if (error.code === "failed-precondition") {
+        console.warn("Missing Firestore index – check console link.")
+      }
+
+      return []
+    }
+  }
+
+  const handleViewProfile = async (user: User) => {
+    setSelectedUser(user)
+    setRecentContributions([])
+    setWithdrawalHistory([])
+    if (!db) return
+
+    try {
+      const [credits, debits] = await Promise.all([
+        fetchUserTransactions(user.uid, "credit", 2),
+        fetchUserTransactions(user.uid, "debit", 2),
+      ])
+
+      setRecentContributions(credits)
+      setWithdrawalHistory(debits)
+    } catch (error) {
+      console.error("Error loading user transactions:", error)
+    }
+  }
+
+
   const handleAddUser = async () => {
+    // Validate required fields
     if (!newUser.firstName || !newUser.lastName || !newUser.email || !newUser.phoneNumber) {
-      alert("Please fill in all fields")
+      toast.error("Please fill in all fields")
       return
     }
 
-    if (!newUser.phoneNumber.startsWith("+")) {
-      alert("Phone number must start with a plus sign (+)")
-      return
-    }
-
-    if (!newUser.phoneNumber.startsWith("+234")) {
-      alert("Phone number must start with +234")
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(newUser.email)) {
+      toast.error("Please enter a valid email address")
       return
     }
 
     try {
-      setLoading2(true) // Re-using loading state or create a specific one if preferred
+      setLoading2(true)
 
       const response = await fetch("/api/users/create", {
         method: "POST",
@@ -176,10 +243,31 @@ export default function UsersPage() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to create user")
+        // Handle specific error messages
+        const errorMessage = data.error || "Failed to create user"
+        toast.error(errorMessage)
+        setLoading2(false)
+        return
       }
 
-      console.log("User created successfully:", data)
+      // Success - add user to local state immediately (optimistic update)
+      const newUserData: User = {
+        uid: data.uid,
+        firstName: newUser.firstName,
+        lastName: newUser.lastName,
+        email: newUser.email,
+        phoneNumber: newUser.phoneNumber,
+        initialBalance: 0,
+        status: "active",
+        isVerified: true,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      }
+
+      // Add to users list immediately
+      setUsers(prevUsers => [newUserData, ...prevUsers])
+
+      toast.success(`User ${newUser.firstName} ${newUser.lastName} created successfully!`)
 
       // Reset form and close dialog
       setNewUser({
@@ -189,21 +277,45 @@ export default function UsersPage() {
         phoneNumber: ""
       })
       setShowAddUser(false)
-
-      await fetchUsers()
-      // The onSnapshot listener in useEffect will automatically pick up the new user!
-      // But we can trigger a manual fetch if needed, though onSnapshot is best.
+      setLoading2(false)
 
     } catch (error: any) {
       console.error("Error creating user:", error)
-      alert(error.message)
-    } finally {
+      toast.error(`Failed to create user: ${error.message}`)
       setLoading2(false)
+    }
+  }
+
+  type UserStatus = "active" | "suspended"
+
+  const updateUserStatus = async (uid: string, status: UserStatus) => {
+    try {
+      if (!db) {
+        throw new Error("Firebase not initialized")
+      }
+      setLoading2(true)
+      const userRef = doc(db, "users", uid)
+
+      await updateDoc(userRef, {
+        status,
+        updatedAt: serverTimestamp(),
+      })
+      await fetchUsers()
+      setLoading2(false)
+      setSelectedUser(null)
+      toast.success(`User status updated to ${status}`)
+      return true
+    } catch (error) {
+      console.error("Error updating user status:", error)
+      toast.error("Failed to update user status")
+      setLoading2(false)
+      return false
     }
   }
 
   return (
     <DashboardLayout>
+      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div>
@@ -334,17 +446,21 @@ export default function UsersPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => setSelectedUser(user)}>
+                            <DropdownMenuItem onClick={() => handleViewProfile(user)}>
                               <Eye className="h-4 w-4 mr-2" />
                               View Profile
                             </DropdownMenuItem>
-                            {user.isVerified ? (
-                              <DropdownMenuItem className="text-destructive">
+                            {user.status === "active" ? (
+                              <DropdownMenuItem
+                                onClick={() => updateUserStatus(user.uid, "suspended")}
+                                className="text-destructive">
                                 <Ban className="h-4 w-4 mr-2" />
                                 Suspend User
                               </DropdownMenuItem>
                             ) : (
-                              <DropdownMenuItem className="text-success">
+                              <DropdownMenuItem
+                                onClick={() => updateUserStatus(user.uid, "active")}
+                                className="text-success">
                                 <CheckCircle className="h-4 w-4 mr-2" />
                                 Activate User
                               </DropdownMenuItem>
@@ -408,49 +524,83 @@ export default function UsersPage() {
                 <div className="space-y-4">
                   <h4 className="font-medium">Recent Contributions</h4>
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                      <div>
-                        <div className="text-sm font-medium">Weekly Contribution</div>
-                        <div className="text-xs text-muted-foreground">March 15, 2024</div>
-                      </div>
-                      <div className="text-sm font-medium text-success">+₦25,000</div>
-                    </div>
-                    <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                      <div>
-                        <div className="text-sm font-medium">Weekly Contribution</div>
-                        <div className="text-xs text-muted-foreground">March 8, 2024</div>
-                      </div>
-                      <div className="text-sm font-medium text-success">+₦25,000</div>
-                    </div>
+                    {recentContributions.length > 0 ? (
+                      recentContributions.map((tx) => (
+                        <div key={tx.id} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                          <div>
+                            <div className="text-sm font-medium">Contribution</div>
+                            <div className="text-xs text-muted-foreground">
+                              {tx.createdAt?.toDate()?.toLocaleDateString("en-US", {
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric'
+                              })}
+                            </div>
+                          </div>
+                          <div className="text-sm font-medium text-success">
+                            +₦{Number(tx.amount || 0).toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2
+                            })}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-muted-foreground p-2">No recent contributions found</div>
+                    )}
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <h4 className="font-medium">Withdrawal History</h4>
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                      <div>
-                        <div className="text-sm font-medium">Emergency Withdrawal</div>
-                        <div className="text-xs text-muted-foreground">February 28, 2024</div>
-                      </div>
-                      <div className="text-sm font-medium text-destructive">-₦15,000</div>
-                    </div>
+                    {withdrawalHistory.length > 0 ? (
+                      withdrawalHistory.map((tx) => (
+                        <div key={tx.id} className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                          <div>
+                            <div className="text-sm font-medium">{tx.description || "Withdrawal"}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {tx.createdAt?.toDate()?.toLocaleDateString("en-US", {
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric'
+                              })}
+                            </div>
+                          </div>
+                          <div className="text-sm font-medium text-destructive">
+                            -₦{Number(tx.amount || 0).toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2
+                            })}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-sm text-muted-foreground p-2">No withdrawal history found</div>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex gap-2 pt-4">
-                  <Button variant="outline" className="flex-1 bg-transparent">
-                    Send Message
+                  <Button
+                    onClick={() => setSelectedUser(null)}
+                    variant="outline" className="flex-1 bg-transparent">
+                    close
                   </Button>
-                  {selectedUser.isVerified ? (
-                    <Button variant="destructive" className="flex-1">
+                  {selectedUser.status === "active" ? (
+                    <Button
+                      variant="destructive"
+                      className="flex-1"
+                      onClick={() => updateUserStatus(selectedUser.uid, "suspended")}
+                    >
                       <Ban className="h-4 w-4 mr-2" />
-                      Suspend Account
+                      {loading2 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : "Suspend Account"}
                     </Button>
                   ) : (
-                    <Button className="flex-1">
+                    <Button className="flex-1"
+                      onClick={() => updateUserStatus(selectedUser.uid, "active")}>
                       <CheckCircle className="h-4 w-4 mr-2" />
-                      Activate Account
+                      {loading2 ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : "Activate Account"}
                     </Button>
                   )}
                 </div>
@@ -514,7 +664,7 @@ export default function UsersPage() {
                 onClick={handleAddUser}
                 disabled={!newUser.firstName || !newUser.lastName || !newUser.email || !newUser.phoneNumber}
               >
-                Add User
+                {loading2 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : "Add User"}
               </Button>
             </div>
           </DialogContent>

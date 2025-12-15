@@ -7,14 +7,27 @@ export async function POST(request: Request) {
         const body = await request.json();
         const { email, firstName, lastName, phoneNumber } = body;
 
+        // Validate inputs
+        if (!email || !firstName || !lastName || !phoneNumber) {
+            return NextResponse.json(
+                { error: "All fields are required" },
+                { status: 400 }
+            );
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return NextResponse.json(
+                { error: "Invalid email format" },
+                { status: 400 }
+            );
+        }
+
         // 1. Create user in Firebase Authentication
-        // We set a default password as requested: "123456"
-        // In a real app, you might generate a random password or send an invite link.
         const userRecord = await adminAuth.createUser({
             email,
             password: "123456",
-            displayName: `${firstName} ${lastName}`,
-            phoneNumber: phoneNumber, // Ensure phone number is in E.164 format (e.g. +234...)
         });
 
         const uid = userRecord.uid;
@@ -27,22 +40,45 @@ export async function POST(request: Request) {
             firstName: firstName,
             lastName: lastName,
             phoneNumber: phoneNumber,
-            isVerified: false,
+            isVerified: true,
             status: "active",
-            verificationCode: "", // Empty initially
-            verificationCodeExpiry: now, // Determine expiry logic if needed
+            verificationCode: "",
+            verificationCodeExpiry: now,
             createdAt: now,
             updatedAt: now,
         };
 
         await adminDb.collection("users").doc(uid).set(userData);
 
-        return NextResponse.json({ success: true, uid: uid }, { status: 201 });
+        // Return complete user data
+        return NextResponse.json({
+            success: true,
+            uid: uid,
+            user: userData
+        }, { status: 201 });
+
     } catch (error: any) {
         console.error("Error creating user:", error);
+
+        // Map Firebase error codes to user-friendly messages
+        let errorMessage = "Failed to create user";
+
+        if (error.code === "auth/email-already-exists") {
+            errorMessage = "This email address is already registered";
+        } else if (error.code === "auth/invalid-email") {
+            errorMessage = "Invalid email address";
+        } else if (error.code === "auth/invalid-phone-number") {
+            errorMessage = "Invalid phone number format";
+        } else if (error.code === "auth/phone-number-already-exists") {
+            errorMessage = "This phone number is already registered";
+        } else if (error.message) {
+            errorMessage = error.message;
+        }
+
         return NextResponse.json(
-            { error: error.message || "Failed to create user" },
+            { error: errorMessage },
             { status: 500 }
         );
     }
 }
+

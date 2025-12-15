@@ -19,98 +19,310 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Search, Download, Check, X, Eye, Clock, ArrowDownToLine } from "lucide-react"
-import { useState } from "react"
+import { Search, Download, Check, X, Eye, Clock, ArrowDownToLine, Loader2 } from "lucide-react"
+import { useState, useEffect } from "react"
+import { db } from "@/lib/firebase_config"
+import { collection, getDocs, query, orderBy, Timestamp, where, updateDoc, doc, serverTimestamp, addDoc } from "firebase/firestore"
+import { toast, Toaster } from "react-hot-toast"
+import { formatDistanceToNow } from "date-fns"
+import { v4 as uuidv4 } from "uuid"
 
-const pendingWithdrawals = [
-  {
-    id: "WTH001",
-    user: "Sarah Johnson",
-    amount: "₦25,000",
-    date: "2024-03-15",
-    time: "14:30",
-    reason: "Emergency medical expenses",
-    accountDetails: "GTBank - 0123456789",
-    status: "pending",
-    requestDate: "2024-03-15",
-  },
-  {
-    id: "WTH002",
-    user: "Michael Brown",
-    amount: "₦50,000",
-    date: "2024-03-15",
-    time: "12:15",
-    reason: "School fees payment",
-    accountDetails: "Access Bank - 0987654321",
-    status: "pending",
-    requestDate: "2024-03-15",
-  },
-  {
-    id: "WTH003",
-    user: "Emily Davis",
-    amount: "₦15,000",
-    date: "2024-03-14",
-    time: "16:20",
-    reason: "Business investment",
-    accountDetails: "First Bank - 0456789123",
-    status: "pending",
-    requestDate: "2024-03-14",
-  },
-]
+interface WithdrawalRequest {
+  id: string
+  withdrawalRequestId: string
+  userId: string
+  savingsId: string
+  requestAmount: number
+  totalDeductedAmount: number
+  totalTransferableAmount: number
+  destinationBankAccountNumber: string
+  destinationBankName: string
+  destinationBankCode: string
+  narration: string
+  status: string
+  createdAt: Timestamp
+  updatedAt: Timestamp
+  approvedBy: string | null
+  rejectedBy: string | null
+  requestedTransferRef: string | null
+  bulkRef: string | null
+  breakingFeeRef: string | null
+}
 
-const processedWithdrawals = [
-  {
-    id: "WTH004",
-    user: "John Doe",
-    amount: "₦30,000",
-    date: "2024-03-14",
-    time: "09:45",
-    reason: "Personal emergency",
-    accountDetails: "UBA - 0789123456",
-    status: "approved",
-    processedBy: "Admin User",
-    processedDate: "2024-03-14",
-  },
-  {
-    id: "WTH005",
-    user: "David Wilson",
-    amount: "₦20,000",
-    date: "2024-03-13",
-    time: "11:30",
-    reason: "Medical bills",
-    accountDetails: "Zenith Bank - 0321654987",
-    status: "declined",
-    processedBy: "Admin User",
-    processedDate: "2024-03-13",
-    declineReason: "Insufficient savings period",
-  },
-  {
-    id: "WTH006",
-    user: "Lisa Anderson",
-    amount: "₦40,000",
-    date: "2024-03-12",
-    time: "15:20",
-    reason: "Home renovation",
-    accountDetails: "Sterling Bank - 0654321098",
-    status: "approved",
-    processedBy: "Admin User",
-    processedDate: "2024-03-12",
-  },
-]
+interface User {
+  uid: string
+  firstName: string
+  lastName: string
+  email: string
+}
+
+interface SavingsPlan {
+  id: string
+  savingsId: string
+  userId: string
+  savingsName: string
+  targetAmount: number
+  actualAmount: number
+  status: string
+  startDate: Timestamp
+  duration: string
+}
+
+// Fee configuration (adjustable)
+const COMPLETED_PLAN_FEE_PERCENTAGE = 0.10  // 10% if plan completed
+const BROKEN_PLAN_FEE_PERCENTAGE = 0.20     // 20% if plan broken early
 
 export default function WithdrawalsClientPage() {
   const [searchTerm, setSearchTerm] = useState("")
-  const [selectedWithdrawal, setSelectedWithdrawal] = useState<any>(null)
+  const [selectedWithdrawal, setSelectedWithdrawal] = useState<WithdrawalRequest | null>(null)
   const [actionType, setActionType] = useState<"approve" | "decline" | null>(null)
   const [declineReason, setDeclineReason] = useState("")
   const [showInitiateWithdrawal, setShowInitiateWithdrawal] = useState(false)
   const [newWithdrawal, setNewWithdrawal] = useState({
     userId: "",
-    amount: "",
-    reason: "",
-    accountDetails: "",
-    notes: "",
+    savingsId: "",
+    requestAmount: "",
+    narration: "",
+    destinationBankName: "",
+    destinationBankAccountNumber: "",
+    destinationBankCode: "",
   })
+
+  // Firebase state
+  const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([])
+  const [users, setUsers] = useState<Record<string, User>>({})
+  const [allUsers, setAllUsers] = useState<User[]>([])
+  const [savingsPlans, setSavingsPlans] = useState<SavingsPlan[]>([])
+  const [userSavingsPlans, setUserSavingsPlans] = useState<SavingsPlan[]>([])
+  const [selectedPlan, setSelectedPlan] = useState<SavingsPlan | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+
+  // Helper function to parse duration string
+  const parseDuration = (duration: string): { value: number; unit: string } => {
+    const match = duration.match(/(\d+)\s*(day|week|month|year)s?/i)
+    if (!match) return { value: 0, unit: 'day' }
+    return {
+      value: parseInt(match[1]),
+      unit: match[2].toLowerCase()
+    }
+  }
+
+  // Helper function to calculate end date from start date and duration
+  const calculateEndDate = (startDate: Timestamp, duration: string): Date => {
+    const start = startDate.toDate()
+    const { value, unit } = parseDuration(duration)
+
+    const endDate = new Date(start)
+    switch (unit) {
+      case 'day':
+        endDate.setDate(endDate.getDate() + value)
+        break
+      case 'week':
+        endDate.setDate(endDate.getDate() + (value * 7))
+        break
+      case 'month':
+        endDate.setMonth(endDate.getMonth() + value)
+        break
+      case 'year':
+        endDate.setFullYear(endDate.getFullYear() + value)
+        break
+    }
+
+    return endDate
+  }
+
+  // Helper function to check if plan is completed
+  const isPlanCompleted = (plan: SavingsPlan): boolean => {
+    const endDate = calculateEndDate(plan.startDate, plan.duration)
+    const currentDate = new Date()
+    return currentDate >= endDate
+  }
+
+  // Calculate withdrawal details
+  const calculateWithdrawalDetails = (plan: SavingsPlan | null, requestAmount: number) => {
+    if (!plan || !requestAmount || isNaN(requestAmount)) {
+      return {
+        isCompleted: false,
+        feePercentage: 0,
+        fee: 0,
+        totalDeducted: 0,
+        hasSufficientFunds: false,
+        maxWithdrawable: 0,
+        remainingBalance: 0,
+        endDate: null
+      }
+    }
+
+    const isCompleted = isPlanCompleted(plan)
+    const feePercentage = isCompleted ? COMPLETED_PLAN_FEE_PERCENTAGE : BROKEN_PLAN_FEE_PERCENTAGE
+    const fee = requestAmount * feePercentage
+    const totalDeducted = requestAmount + fee
+
+    // Check if actualAmount can cover BOTH the requested amount AND the fee
+    // Fee is deducted first, then user receives the requested amount
+    const hasSufficientFunds = plan.actualAmount >= totalDeducted
+
+    // Maximum amount user can request (after fee deduction)
+    // If user requests this amount, fee will be deducted and they'll receive this exact amount
+    const maxWithdrawable = plan.actualAmount / (1 + feePercentage)
+
+    // Remaining balance after withdrawal
+    const remainingBalance = hasSufficientFunds ? plan.actualAmount - totalDeducted : 0
+
+    return {
+      isCompleted,
+      feePercentage,
+      fee,
+      totalDeducted,
+      hasSufficientFunds,
+      maxWithdrawable,
+      remainingBalance,
+      endDate: calculateEndDate(plan.startDate, plan.duration)
+    }
+  }
+
+  // Fetch withdrawal requests and users
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        if (!db) {
+          console.error("Firebase not initialized")
+          setLoading(false)
+          return
+        }
+
+        // Fetch withdrawal requests
+        const withdrawalsRef = collection(db, "withdrawalRequests")
+        const withdrawalsQuery = query(withdrawalsRef, orderBy("createdAt", "desc"))
+        const withdrawalsSnapshot = await getDocs(withdrawalsQuery)
+
+        const withdrawalsData = withdrawalsSnapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as WithdrawalRequest[]
+
+        setWithdrawalRequests(withdrawalsData)
+
+        // Fetch users
+        const usersRef = collection(db, "users")
+        const usersSnapshot = await getDocs(usersRef)
+
+        const usersMap: Record<string, User> = {}
+        const usersArray: User[] = []
+        usersSnapshot.docs.forEach((doc) => {
+          const userData = { uid: doc.id, ...doc.data() } as User
+          usersMap[doc.id] = userData
+          usersArray.push(userData)
+        })
+
+        setUsers(usersMap)
+        setAllUsers(usersArray)
+
+        // Fetch savings plans
+        const savingsRef = collection(db, "savings")
+        const savingsSnapshot = await getDocs(savingsRef)
+        const savingsData = savingsSnapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as SavingsPlan[]
+        setSavingsPlans(savingsData)
+
+        setLoading(false)
+      } catch (error) {
+        console.error("Error fetching data:", error)
+        toast.error("Failed to load withdrawal requests")
+        setLoading(false)
+      }
+    }
+
+    fetchData()
+  }, [])
+
+  // Update user savings plans when user is selected
+  useEffect(() => {
+    if (newWithdrawal.userId) {
+      const userPlans = savingsPlans.filter(
+        (plan) => plan.userId === newWithdrawal.userId && plan.status === "active"
+      )
+      setUserSavingsPlans(userPlans)
+      // Reset savings selection when user changes
+      setNewWithdrawal(prev => ({ ...prev, savingsId: "" }))
+      setSelectedPlan(null)
+    } else {
+      setUserSavingsPlans([])
+      setSelectedPlan(null)
+    }
+  }, [newWithdrawal.userId, savingsPlans])
+
+  // Update selected plan when savings plan is selected
+  useEffect(() => {
+    if (newWithdrawal.savingsId) {
+      const plan = savingsPlans.find(p => p.savingsId === newWithdrawal.savingsId)
+      setSelectedPlan(plan || null)
+    } else {
+      setSelectedPlan(null)
+    }
+  }, [newWithdrawal.savingsId, savingsPlans])
+
+  // Filter withdrawals
+  const pendingWithdrawals = withdrawalRequests.filter(w => w.status === "pending")
+  const processedWithdrawals = withdrawalRequests.filter(w => w.status === "approved" || w.status === "declined")
+
+  // Calculate statistics
+  const pendingCount = pendingWithdrawals.length
+  const pendingTotal = pendingWithdrawals.reduce((sum, w) => sum + w.requestAmount, 0)
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const approvedToday = processedWithdrawals.filter(w => {
+    const updatedDate = w.updatedAt.toDate()
+    updatedDate.setHours(0, 0, 0, 0)
+    return w.status === "approved" && updatedDate.getTime() === today.getTime()
+  })
+  const approvedTodayCount = approvedToday.length
+  const approvedTodayTotal = approvedToday.reduce((sum, w) => sum + w.totalTransferableAmount, 0)
+
+  const thisMonth = new Date()
+  thisMonth.setDate(1)
+  thisMonth.setHours(0, 0, 0, 0)
+  const thisMonthWithdrawals = processedWithdrawals.filter(w => {
+    return w.status === "approved" && w.updatedAt.toDate() >= thisMonth
+  })
+  const thisMonthTotal = thisMonthWithdrawals.reduce((sum, w) => sum + w.totalTransferableAmount, 0)
+  const thisMonthCount = thisMonthWithdrawals.length
+
+  // Helper function to get user name
+  const getUserName = (userId: string) => {
+    const user = users[userId]
+    return user ? `${user.firstName} ${user.lastName}` : "Unknown User"
+  }
+
+  // Helper function to format currency
+  const formatCurrency = (amount: number) => {
+    return `₦${amount.toLocaleString()}`
+  }
+
+  // Helper function to format date
+  const formatDate = (timestamp: Timestamp) => {
+    try {
+      const date = timestamp.toDate()
+      return {
+        date: date.toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }),
+        time: date.toLocaleTimeString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }),
+      }
+    } catch {
+      return { date: "N/A", time: "N/A" }
+    }
+  }
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -125,40 +337,164 @@ export default function WithdrawalsClientPage() {
     }
   }
 
-  const handleApprove = (withdrawal: any) => {
+  const handleApprove = (withdrawal: WithdrawalRequest) => {
     setSelectedWithdrawal(withdrawal)
     setActionType("approve")
   }
 
-  const handleDecline = (withdrawal: any) => {
+  const handleDecline = (withdrawal: WithdrawalRequest) => {
     setSelectedWithdrawal(withdrawal)
     setActionType("decline")
   }
 
-  const confirmAction = () => {
-    console.log(`${actionType}ing withdrawal ${selectedWithdrawal?.id}`)
-    if (actionType === "decline") {
-      console.log("Decline reason:", declineReason)
+  const confirmAction = async () => {
+    if (!selectedWithdrawal || !db) return
+
+    try {
+      setSubmitting(true)
+      const withdrawalRef = doc(db, "withdrawalRequests", selectedWithdrawal.id)
+
+      if (actionType === "approve") {
+        await updateDoc(withdrawalRef, {
+          status: "approved",
+          approvedBy: "Admin User", // TODO: Replace with actual admin user ID
+          updatedAt: serverTimestamp(),
+        })
+        toast.success(`Withdrawal request approved successfully!`)
+      } else if (actionType === "decline") {
+        await updateDoc(withdrawalRef, {
+          status: "declined",
+          rejectedBy: "Admin User", // TODO: Replace with actual admin user ID
+          updatedAt: serverTimestamp(),
+          declineReason: declineReason,
+        })
+        toast.success(`Withdrawal request declined`)
+      }
+
+      // Refresh data
+      const withdrawalsRef = collection(db, "withdrawalRequests")
+      const withdrawalsQuery = query(withdrawalsRef, orderBy("createdAt", "desc"))
+      const withdrawalsSnapshot = await getDocs(withdrawalsQuery)
+      const withdrawalsData = withdrawalsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as WithdrawalRequest[]
+      setWithdrawalRequests(withdrawalsData)
+
+      setSelectedWithdrawal(null)
+      setActionType(null)
+      setDeclineReason("")
+      setSubmitting(false)
+    } catch (error: any) {
+      console.error(`Error ${actionType}ing withdrawal:`, error)
+      toast.error(`Failed to ${actionType} withdrawal: ${error.message}`)
+      setSubmitting(false)
     }
-    setSelectedWithdrawal(null)
-    setActionType(null)
-    setDeclineReason("")
   }
 
-  const handleInitiateWithdrawal = () => {
-    console.log("[v0] Initiating new withdrawal:", newWithdrawal)
-    setShowInitiateWithdrawal(false)
-    setNewWithdrawal({
-      userId: "",
-      amount: "",
-      reason: "",
-      accountDetails: "",
-      notes: "",
-    })
+  const handleInitiateWithdrawal = async () => {
+    // Validate required fields
+    if (!newWithdrawal.userId || !newWithdrawal.savingsId || !newWithdrawal.requestAmount ||
+      !newWithdrawal.narration || !newWithdrawal.destinationBankName ||
+      !newWithdrawal.destinationBankAccountNumber || !newWithdrawal.destinationBankCode) {
+      toast.error("Please fill in all required fields")
+      return
+    }
+
+    // Get selected plan
+    if (!selectedPlan) {
+      toast.error("Selected savings plan not found")
+      return
+    }
+
+    try {
+      setSubmitting(true)
+
+      if (!db) {
+        throw new Error("Firebase not initialized")
+      }
+
+      const requestAmount = parseFloat(newWithdrawal.requestAmount)
+      const withdrawalDetails = calculateWithdrawalDetails(selectedPlan, requestAmount)
+
+      // Validate sufficient funds (check if actualAmount can cover requestAmount + fee)
+      if (!withdrawalDetails.hasSufficientFunds) {
+        toast.error(
+          `Insufficient funds! Maximum withdrawable: ₦${withdrawalDetails.maxWithdrawable.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+          })} (after ${(withdrawalDetails.feePercentage * 100).toFixed(0)}% fee)`
+        )
+        setSubmitting(false)
+        return
+      }
+
+      const withdrawalRequestId = uuidv4()
+
+      // The user receives the requested amount
+      // The fee is deducted from their savings
+      const totalTransferableAmount = requestAmount
+
+      const withdrawalData = {
+        withdrawalRequestId,
+        userId: newWithdrawal.userId,
+        savingsId: newWithdrawal.savingsId,
+        requestAmount,
+        totalDeductedAmount: withdrawalDetails.totalDeducted,
+        totalTransferableAmount,
+        destinationBankName: newWithdrawal.destinationBankName,
+        destinationBankAccountNumber: newWithdrawal.destinationBankAccountNumber,
+        destinationBankCode: newWithdrawal.destinationBankCode,
+        narration: newWithdrawal.narration,
+        status: "pending",
+        approvedBy: null,
+        rejectedBy: null,
+        requestedTransferRef: null,
+        bulkRef: null,
+        breakingFeeRef: null,
+        breakingFeePercentage: withdrawalDetails.feePercentage,
+        isPlanCompleted: withdrawalDetails.isCompleted,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+
+      await addDoc(collection(db, "withdrawalRequests"), withdrawalData)
+
+      toast.success("Withdrawal request created successfully!")
+
+      // Refresh withdrawal requests
+      const withdrawalsRef = collection(db, "withdrawalRequests")
+      const withdrawalsQuery = query(withdrawalsRef, orderBy("createdAt", "desc"))
+      const withdrawalsSnapshot = await getDocs(withdrawalsQuery)
+      const withdrawalsData = withdrawalsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as WithdrawalRequest[]
+      setWithdrawalRequests(withdrawalsData)
+
+      // Reset form
+      setNewWithdrawal({
+        userId: "",
+        savingsId: "",
+        requestAmount: "",
+        narration: "",
+        destinationBankName: "",
+        destinationBankAccountNumber: "",
+        destinationBankCode: "",
+      })
+      setSelectedPlan(null)
+      setShowInitiateWithdrawal(false)
+      setSubmitting(false)
+    } catch (error: any) {
+      console.error("Error creating withdrawal request:", error)
+      toast.error(`Failed to create withdrawal request: ${error.message}`)
+      setSubmitting(false)
+    }
   }
 
   return (
     <DashboardLayout>
+      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -179,8 +515,8 @@ export default function WithdrawalsClientPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Pending Approvals</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">23</div>
-              <div className="text-xs text-warning">₦890,000 total</div>
+              <div className="text-2xl font-bold">{loading ? <Loader2 className="h-6 w-6 animate-spin" /> : pendingCount}</div>
+              <div className="text-xs text-warning">{formatCurrency(pendingTotal)} total</div>
             </CardContent>
           </Card>
           <Card>
@@ -188,8 +524,8 @@ export default function WithdrawalsClientPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Approved Today</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">12</div>
-              <div className="text-xs text-success">₦450,000 processed</div>
+              <div className="text-2xl font-bold">{loading ? <Loader2 className="h-6 w-6 animate-spin" /> : approvedTodayCount}</div>
+              <div className="text-xs text-success">{formatCurrency(approvedTodayTotal)} processed</div>
             </CardContent>
           </Card>
           <Card>
@@ -197,8 +533,8 @@ export default function WithdrawalsClientPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">This Month</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">₦2,340,500</div>
-              <div className="text-xs text-muted-foreground">156 transactions</div>
+              <div className="text-2xl font-bold">{loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(thisMonthTotal)}</div>
+              <div className="text-xs text-muted-foreground">{thisMonthCount} transactions</div>
             </CardContent>
           </Card>
           <Card>
@@ -260,86 +596,104 @@ export default function WithdrawalsClientPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pendingWithdrawals.map((withdrawal) => (
-                      <TableRow key={withdrawal.id}>
-                        <TableCell className="font-medium">{withdrawal.id}</TableCell>
-                        <TableCell>{withdrawal.user}</TableCell>
-                        <TableCell className="font-semibold">{withdrawal.amount}</TableCell>
-                        <TableCell className="max-w-32 truncate">{withdrawal.reason}</TableCell>
-                        <TableCell className="text-sm">{withdrawal.accountDetails}</TableCell>
-                        <TableCell>
-                          <div>
-                            <div className="text-sm">{withdrawal.requestDate}</div>
-                            <div className="text-xs text-muted-foreground">{withdrawal.time}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Dialog>
-                              <DialogTrigger asChild>
-                                <Button variant="outline" size="sm">
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                              </DialogTrigger>
-                              <DialogContent>
-                                <DialogHeader>
-                                  <DialogTitle>Withdrawal Request Details</DialogTitle>
-                                  <DialogDescription>
-                                    Review the complete withdrawal request information
-                                  </DialogDescription>
-                                </DialogHeader>
-                                <div className="space-y-4">
-                                  <div className="grid gap-4 md:grid-cols-2">
-                                    <div>
-                                      <label className="text-sm font-medium">Request ID</label>
-                                      <div className="text-sm">{withdrawal.id}</div>
-                                    </div>
-                                    <div>
-                                      <label className="text-sm font-medium">User</label>
-                                      <div className="text-sm">{withdrawal.user}</div>
-                                    </div>
-                                    <div>
-                                      <label className="text-sm font-medium">Amount</label>
-                                      <div className="text-lg font-semibold">{withdrawal.amount}</div>
-                                    </div>
-                                    <div>
-                                      <label className="text-sm font-medium">Request Date</label>
-                                      <div className="text-sm">
-                                        {withdrawal.requestDate} at {withdrawal.time}
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <label className="text-sm font-medium">Reason for Withdrawal</label>
-                                    <div className="text-sm mt-1">{withdrawal.reason}</div>
-                                  </div>
-                                  <div>
-                                    <label className="text-sm font-medium">Account Details</label>
-                                    <div className="text-sm mt-1">{withdrawal.accountDetails}</div>
-                                  </div>
-                                </div>
-                                <DialogFooter>
-                                  <Button variant="outline" onClick={() => handleDecline(withdrawal)}>
-                                    <X className="h-4 w-4 mr-2" />
-                                    Decline
-                                  </Button>
-                                  <Button onClick={() => handleApprove(withdrawal)}>
-                                    <Check className="h-4 w-4 mr-2" />
-                                    Approve
-                                  </Button>
-                                </DialogFooter>
-                              </DialogContent>
-                            </Dialog>
-                            <Button size="sm" onClick={() => handleApprove(withdrawal)}>
-                              <Check className="h-4 w-4" />
-                            </Button>
-                            <Button variant="outline" size="sm" onClick={() => handleDecline(withdrawal)}>
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
+                    {loading ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center py-10">
+                          <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+                          <p className="text-sm text-muted-foreground mt-2">Loading withdrawal requests...</p>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ) : pendingWithdrawals.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center py-10">
+                          <p className="text-sm text-muted-foreground">No pending withdrawal requests</p>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      pendingWithdrawals.map((withdrawal) => {
+                        const dateInfo = formatDate(withdrawal.createdAt)
+                        return (
+                          <TableRow key={withdrawal.id}>
+                            <TableCell className="font-medium">{withdrawal.withdrawalRequestId.substring(0, 8).toUpperCase()}</TableCell>
+                            <TableCell>{getUserName(withdrawal.userId)}</TableCell>
+                            <TableCell className="font-semibold">{formatCurrency(withdrawal.requestAmount)}</TableCell>
+                            <TableCell className="max-w-32 truncate">{withdrawal.narration}</TableCell>
+                            <TableCell className="text-sm">{withdrawal.destinationBankName} - {withdrawal.destinationBankAccountNumber}</TableCell>
+                            <TableCell>
+                              <div>
+                                <div className="text-sm">{dateInfo.date}</div>
+                                <div className="text-xs text-muted-foreground">{dateInfo.time}</div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button variant="outline" size="sm">
+                                      <Eye className="h-4 w-4" />
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Withdrawal Request Details</DialogTitle>
+                                      <DialogDescription>
+                                        Review the complete withdrawal request information
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="space-y-4">
+                                      <div className="grid gap-4 md:grid-cols-2">
+                                        <div>
+                                          <label className="text-sm font-medium">Request ID</label>
+                                          <div className="text-sm">{withdrawal.withdrawalRequestId.substring(0, 12).toUpperCase()}</div>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm font-medium">User</label>
+                                          <div className="text-sm">{getUserName(withdrawal.userId)}</div>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm font-medium">Amount</label>
+                                          <div className="text-lg font-semibold">{formatCurrency(withdrawal.requestAmount)}</div>
+                                        </div>
+                                        <div>
+                                          <label className="text-sm font-medium">Request Date</label>
+                                          <div className="text-sm">
+                                            {dateInfo.date} at {dateInfo.time}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <label className="text-sm font-medium">Reason for Withdrawal</label>
+                                        <div className="text-sm mt-1">{withdrawal.narration}</div>
+                                      </div>
+                                      <div>
+                                        <label className="text-sm font-medium">Account Details</label>
+                                        <div className="text-sm mt-1">{withdrawal.destinationBankCode} - {withdrawal.destinationBankAccountNumber}</div>
+                                      </div>
+                                    </div>
+                                    <DialogFooter>
+                                      <Button variant="outline" onClick={() => handleDecline(withdrawal)}>
+                                        <X className="h-4 w-4 mr-2" />
+                                        Decline
+                                      </Button>
+                                      <Button onClick={() => handleApprove(withdrawal)}>
+                                        <Check className="h-4 w-4 mr-2" />
+                                        Approve
+                                      </Button>
+                                    </DialogFooter>
+                                  </DialogContent>
+                                </Dialog>
+                                <Button size="sm" onClick={() => handleApprove(withdrawal)}>
+                                  <Check className="h-4 w-4" />
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={() => handleDecline(withdrawal)}>
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      }))
+                    }
                   </TableBody>
                 </Table>
               </CardContent>
@@ -374,19 +728,37 @@ export default function WithdrawalsClientPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {processedWithdrawals.map((withdrawal) => (
-                      <TableRow key={withdrawal.id}>
-                        <TableCell className="font-medium">{withdrawal.id}</TableCell>
-                        <TableCell>{withdrawal.user}</TableCell>
-                        <TableCell className="font-semibold">{withdrawal.amount}</TableCell>
-                        <TableCell>{getStatusBadge(withdrawal.status)}</TableCell>
-                        <TableCell>{withdrawal.processedBy}</TableCell>
-                        <TableCell>{withdrawal.processedDate}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {withdrawal.status === "declined" ? withdrawal.declineReason : "Approved"}
+                    {loading ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center py-10">
+                          <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+                          <p className="text-sm text-muted-foreground mt-2">Loading processed requests...</p>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ) : processedWithdrawals.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} className="text-center py-10">
+                          <p className="text-sm text-muted-foreground">No processed withdrawal requests</p>
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      processedWithdrawals.map((withdrawal) => {
+                        const dateInfo = formatDate(withdrawal.updatedAt)
+                        return (
+                          <TableRow key={withdrawal.id}>
+                            <TableCell className="font-medium">{withdrawal.withdrawalRequestId.substring(0, 8).toUpperCase()}</TableCell>
+                            <TableCell>{getUserName(withdrawal.userId)}</TableCell>
+                            <TableCell className="font-semibold">{formatCurrency(withdrawal.totalTransferableAmount)}</TableCell>
+                            <TableCell>{getStatusBadge(withdrawal.status)}</TableCell>
+                            <TableCell>{withdrawal.approvedBy || withdrawal.rejectedBy || "Admin User"}</TableCell>
+                            <TableCell>{dateInfo.date}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {withdrawal.status === "declined" ? (withdrawal as any).declineReason || "Declined" : "Approved"}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    )}
                   </TableBody>
                 </Table>
               </CardContent>
@@ -418,11 +790,11 @@ export default function WithdrawalsClientPage() {
                   <div className="grid gap-2 md:grid-cols-2">
                     <div>
                       <label className="text-sm font-medium">User</label>
-                      <div className="text-sm">{selectedWithdrawal.user}</div>
+                      <div className="text-sm">{getUserName(selectedWithdrawal.userId)}</div>
                     </div>
                     <div>
                       <label className="text-sm font-medium">Amount</label>
-                      <div className="text-lg font-semibold">{selectedWithdrawal.amount}</div>
+                      <div className="text-lg font-semibold">{formatCurrency(selectedWithdrawal.requestAmount)}</div>
                     </div>
                   </div>
                 </div>
@@ -462,73 +834,166 @@ export default function WithdrawalsClientPage() {
 
         {/* Initiate Withdrawal Dialog */}
         <Dialog open={showInitiateWithdrawal} onOpenChange={setShowInitiateWithdrawal}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle>Initiate Withdrawal</DialogTitle>
-              <DialogDescription>Process a withdrawal request directly from the admin panel</DialogDescription>
+              <DialogDescription>Create a new withdrawal request for a user</DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="user">Select User</Label>
-                <Select
-                  value={newWithdrawal.userId}
-                  onValueChange={(value) => setNewWithdrawal({ ...newWithdrawal, userId: value })}
-                >
-                  <SelectTrigger id="user">
-                    <SelectValue placeholder="Choose a user" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">John Doe - ₦125,000</SelectItem>
-                    <SelectItem value="2">Sarah Johnson - ₦89,500</SelectItem>
-                    <SelectItem value="3">Michael Brown - ₦0</SelectItem>
-                    <SelectItem value="4">Emily Davis - ₦234,750</SelectItem>
-                    <SelectItem value="5">David Wilson - ₦67,200</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="user">Select User *</Label>
+                  <Select
+                    value={newWithdrawal.userId}
+                    onValueChange={(value) => setNewWithdrawal({ ...newWithdrawal, userId: value })}
+                  >
+                    <SelectTrigger id="user">
+                      <SelectValue placeholder="Choose a user..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {allUsers.map((user) => (
+                        <SelectItem key={user.uid} value={user.uid}>
+                          {user.firstName} {user.lastName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="savings">Savings Plan *</Label>
+                  <Select
+                    value={newWithdrawal.savingsId}
+                    onValueChange={(value) => setNewWithdrawal({ ...newWithdrawal, savingsId: value })}
+                    disabled={!newWithdrawal.userId}
+                  >
+                    <SelectTrigger id="savings">
+                      <SelectValue placeholder={newWithdrawal.userId ? "Choose savings plan..." : "Select user first"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {userSavingsPlans.length === 0 ? (
+                        <SelectItem value="none" disabled>No active savings plans</SelectItem>
+                      ) : (
+                        userSavingsPlans.map((plan) => (
+                          <SelectItem key={plan.id} value={plan.savingsId}>
+                            {plan.savingsName} - ₦{plan.actualAmount.toLocaleString()}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="amount">Withdrawal Amount (₦)</Label>
+                <Label htmlFor="amount">Request Amount (₦) *</Label>
                 <Input
                   id="amount"
                   type="number"
-                  placeholder="Enter amount"
-                  value={newWithdrawal.amount}
-                  onChange={(e) => setNewWithdrawal({ ...newWithdrawal, amount: e.target.value })}
+                  placeholder="Enter withdrawal amount"
+                  value={newWithdrawal.requestAmount}
+                  onChange={(e) => setNewWithdrawal({ ...newWithdrawal, requestAmount: e.target.value })}
                 />
+                {newWithdrawal.requestAmount && selectedPlan && (() => {
+                  const requestAmount = parseFloat(newWithdrawal.requestAmount)
+                  const details = calculateWithdrawalDetails(selectedPlan, requestAmount)
+
+                  return (
+                    <div className="space-y-2 mt-2 p-3 bg-muted rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-medium">Plan Status:</span>
+                        <Badge className={details.isCompleted ? "bg-success/10 text-success border-success/20" : "bg-warning/10 text-warning border-warning/20"}>
+                          {details.isCompleted ? "Completed" : "Broken Early"}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span>Request Amount:</span>
+                        <span className="font-medium">₦{requestAmount.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span>Breaking Fee ({(details.feePercentage * 100).toFixed(0)}%):</span>
+                        <span className="font-medium text-warning">₦{details.fee.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                      <div className="flex justify-between text-xs border-t pt-2">
+                        <span className="font-medium">Total Deducted:</span>
+                        <span className="font-semibold">₦{details.totalDeducted.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span>Available in Savings:</span>
+                        <span className="font-medium">₦{selectedPlan.actualAmount.toLocaleString()}</span>
+                      </div>
+                      {details.hasSufficientFunds && (
+                        <div className="flex justify-between text-xs border-t pt-2">
+                          <span className="text-muted-foreground">Remaining Balance:</span>
+                          <span className="font-medium">₦{details.remainingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                      {!details.hasSufficientFunds && (
+                        <div className="mt-2 p-2 bg-destructive/10 border border-destructive/20 rounded text-xs">
+                          <div className="flex items-start gap-2">
+                            <span className="text-destructive font-medium">⚠ Insufficient Funds!</span>
+                          </div>
+                          <div className="mt-1 text-destructive/80">
+                            Maximum withdrawable: ₦{details.maxWithdrawable.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                          <div className="text-xs text-destructive/70 mt-1">
+                            (After {(details.feePercentage * 100).toFixed(0)}% fee, you need ₦{details.totalDeducted.toLocaleString()} total)
+                          </div>
+                        </div>
+                      )}
+                      {details.hasSufficientFunds && (
+                        <div className="flex justify-between text-xs border-t pt-2">
+                          <span className="font-medium text-success">You'll Receive:</span>
+                          <span className="font-semibold text-success">₦{requestAmount.toLocaleString()}</span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="reason">Reason for Withdrawal</Label>
+                <Label htmlFor="narration">Narration/Reason *</Label>
                 <Textarea
-                  id="reason"
-                  placeholder="Enter reason..."
-                  value={newWithdrawal.reason}
-                  onChange={(e) => setNewWithdrawal({ ...newWithdrawal, reason: e.target.value })}
+                  id="narration"
+                  placeholder="e.g., Withdrawal from House Rent"
+                  value={newWithdrawal.narration}
+                  onChange={(e) => setNewWithdrawal({ ...newWithdrawal, narration: e.target.value })}
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="account">Account Details</Label>
-                <Input
-                  id="account"
-                  placeholder="Bank Name - Account Number"
-                  value={newWithdrawal.accountDetails}
-                  onChange={(e) => setNewWithdrawal({ ...newWithdrawal, accountDetails: e.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="notes">Admin Notes (Optional)</Label>
-                <Textarea
-                  id="notes"
-                  placeholder="Add any internal notes..."
-                  value={newWithdrawal.notes}
-                  onChange={(e) => setNewWithdrawal({ ...newWithdrawal, notes: e.target.value })}
-                />
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="bankName">Bank Name *</Label>
+                  <Input
+                    id="bankName"
+                    placeholder="e.g., GTBank"
+                    value={newWithdrawal.destinationBankName}
+                    onChange={(e) => setNewWithdrawal({ ...newWithdrawal, destinationBankName: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="accountNumber">Account Number *</Label>
+                  <Input
+                    id="accountNumber"
+                    placeholder="0114672030"
+                    value={newWithdrawal.destinationBankAccountNumber}
+                    onChange={(e) => setNewWithdrawal({ ...newWithdrawal, destinationBankAccountNumber: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bankCode">Bank Code *</Label>
+                  <Input
+                    id="bankCode"
+                    placeholder="044"
+                    value={newWithdrawal.destinationBankCode}
+                    onChange={(e) => setNewWithdrawal({ ...newWithdrawal, destinationBankCode: e.target.value })}
+                  />
+                </div>
               </div>
             </div>
-            <div className="flex gap-2 pt-4">
+            <DialogFooter>
               <Button
                 variant="outline"
                 className="flex-1 bg-transparent"
                 onClick={() => setShowInitiateWithdrawal(false)}
+                disabled={submitting}
               >
                 Cancel
               </Button>
@@ -536,15 +1001,27 @@ export default function WithdrawalsClientPage() {
                 className="flex-1"
                 onClick={handleInitiateWithdrawal}
                 disabled={
+                  submitting ||
                   !newWithdrawal.userId ||
-                  !newWithdrawal.amount ||
-                  !newWithdrawal.reason ||
-                  !newWithdrawal.accountDetails
+                  !newWithdrawal.savingsId ||
+                  !newWithdrawal.requestAmount ||
+                  !newWithdrawal.narration ||
+                  !newWithdrawal.destinationBankName ||
+                  !newWithdrawal.destinationBankAccountNumber ||
+                  !newWithdrawal.destinationBankCode ||
+                  !!(selectedPlan && newWithdrawal.requestAmount && !calculateWithdrawalDetails(selectedPlan, parseFloat(newWithdrawal.requestAmount)).hasSufficientFunds)
                 }
               >
-                Initiate Withdrawal
+                {submitting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create Withdrawal Request"
+                )}
               </Button>
-            </div>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
