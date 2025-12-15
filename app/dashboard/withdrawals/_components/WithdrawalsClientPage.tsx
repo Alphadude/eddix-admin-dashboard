@@ -387,7 +387,7 @@ export default function WithdrawalsClientPage() {
         const savingsPlan = savingsPlans.find(plan => plan.savingsId === selectedWithdrawal.savingsId)
         if (savingsPlan) {
           const savingsDocRef = doc(db, "savings", savingsPlan.id)
-          const restoredAmount = savingsPlan.actualAmount + selectedWithdrawal.totalDeductedAmount
+          const restoredAmount = savingsPlan.actualAmount + selectedWithdrawal.totalDeductedAmount + selectedWithdrawal.totalTransferableAmount
 
           await updateDoc(savingsDocRef, {
             actualAmount: restoredAmount,
