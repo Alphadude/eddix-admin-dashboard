@@ -69,6 +69,18 @@ interface SavingsPlan {
   duration: string
 }
 
+interface Bank {
+  id: string
+  userId: string
+  accountName: string
+  accountNumber: string
+  bankName: string
+  bankCode: string
+  isActive: boolean
+  createdAt: Timestamp
+  updatedAt: Timestamp
+}
+
 // Fee configuration (adjustable)
 const COMPLETED_PLAN_FEE_PERCENTAGE = 0.10  // 10% if plan completed
 const BROKEN_PLAN_FEE_PERCENTAGE = 0.20     // 20% if plan broken early
@@ -98,6 +110,7 @@ export default function WithdrawalsClientPage() {
   const [selectedPlan, setSelectedPlan] = useState<SavingsPlan | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [loadingBankDetails, setLoadingBankDetails] = useState(false)
 
   // Helper function to parse duration string
   const parseDuration = (duration: string): { value: number; unit: string } => {
@@ -268,6 +281,57 @@ export default function WithdrawalsClientPage() {
       setSelectedPlan(null)
     }
   }, [newWithdrawal.userId, savingsPlans])
+
+  // Fetch and populate bank details when user is selected
+  useEffect(() => {
+    const fetchUserBankDetails = async () => {
+      if (!newWithdrawal.userId || !db) return
+
+      try {
+        setLoadingBankDetails(true)
+
+        // Query for active bank of the selected user
+        const banksQuery = query(
+          collection(db, "banks"),
+          where("userId", "==", newWithdrawal.userId),
+          where("isActive", "==", true)
+        )
+
+        const banksSnapshot = await getDocs(banksQuery)
+
+        if (!banksSnapshot.empty) {
+          const bankData = banksSnapshot.docs[0].data() as Bank
+
+          // Auto-populate bank details
+          setNewWithdrawal(prev => ({
+            ...prev,
+            destinationBankName: bankData.bankName,
+            destinationBankAccountNumber: bankData.accountNumber,
+            destinationBankCode: bankData.bankCode,
+          }))
+
+          toast.success("Bank details loaded successfully")
+        } else {
+          // Clear bank details if no active bank found
+          setNewWithdrawal(prev => ({
+            ...prev,
+            destinationBankName: "",
+            destinationBankAccountNumber: "",
+            destinationBankCode: "",
+          }))
+
+          toast.error("No active bank account found for this user")
+        }
+      } catch (error) {
+        console.error("Error fetching bank details:", error)
+        toast.error("Failed to load bank details")
+      } finally {
+        setLoadingBankDetails(false)
+      }
+    }
+
+    fetchUserBankDetails()
+  }, [newWithdrawal.userId])
 
   // Update selected plan when savings plan is selected
   useEffect(() => {
@@ -1055,6 +1119,7 @@ export default function WithdrawalsClientPage() {
                     placeholder="e.g., GTBank"
                     value={newWithdrawal.destinationBankName}
                     onChange={(e) => setNewWithdrawal({ ...newWithdrawal, destinationBankName: e.target.value })}
+                    disabled={loadingBankDetails}
                   />
                 </div>
                 <div className="space-y-2">
@@ -1064,6 +1129,7 @@ export default function WithdrawalsClientPage() {
                     placeholder="0114672030"
                     value={newWithdrawal.destinationBankAccountNumber}
                     onChange={(e) => setNewWithdrawal({ ...newWithdrawal, destinationBankAccountNumber: e.target.value })}
+                    disabled={loadingBankDetails}
                   />
                 </div>
                 <div className="space-y-2">
@@ -1073,9 +1139,16 @@ export default function WithdrawalsClientPage() {
                     placeholder="044"
                     value={newWithdrawal.destinationBankCode}
                     onChange={(e) => setNewWithdrawal({ ...newWithdrawal, destinationBankCode: e.target.value })}
+                    disabled={loadingBankDetails}
                   />
                 </div>
               </div>
+              {loadingBankDetails && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Loading bank details...</span>
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button
