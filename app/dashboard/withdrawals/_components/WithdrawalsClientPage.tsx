@@ -30,6 +30,7 @@ import { v4 as uuidv4 } from "uuid"
 interface WithdrawalRequest {
   id: string
   withdrawalRequestId: string
+  breakingFeePercentage: number
   userId: string
   savingsId: string
   requestAmount: number
@@ -384,20 +385,29 @@ export default function WithdrawalsClientPage() {
         })
 
         // Reverse the deduction - add back the totalDeductedAmount to savings
-        const savingsPlan = savingsPlans.find(plan => plan.savingsId === selectedWithdrawal.savingsId)
-        if (savingsPlan) {
-          const savingsDocRef = doc(db, "savings", savingsPlan.id)
-          const restoredAmount = savingsPlan.actualAmount + selectedWithdrawal.totalDeductedAmount + selectedWithdrawal.totalTransferableAmount
+        // Fetch current savings plan from Firebase (not from stale state)
+        const savingsQuery = query(
+          collection(db, "savings"),
+          where("savingsId", "==", selectedWithdrawal.savingsId)
+        )
+        const savingsSnapshot = await getDocs(savingsQuery)
 
-          await updateDoc(savingsDocRef, {
+        if (!savingsSnapshot.empty) {
+          const savingsPlanDoc = savingsSnapshot.docs[0]
+          const currentSavingsPlan = savingsPlanDoc.data() as SavingsPlan
+
+          // Restore the full deducted amount
+          const restoredAmount = currentSavingsPlan.actualAmount + selectedWithdrawal.totalDeductedAmount
+
+          await updateDoc(doc(db, "savings", savingsPlanDoc.id), {
             actualAmount: restoredAmount,
             updatedAt: serverTimestamp()
           })
 
           // Refresh savings plans
           const savingsRef = collection(db, "savings")
-          const savingsSnapshot = await getDocs(savingsRef)
-          const savingsData = savingsSnapshot.docs.map((doc) => ({
+          const allSavingsSnapshot = await getDocs(savingsRef)
+          const savingsData = allSavingsSnapshot.docs.map((doc) => ({
             id: doc.id,
             ...doc.data(),
           })) as SavingsPlan[]
@@ -446,6 +456,7 @@ export default function WithdrawalsClientPage() {
     }
 
     try {
+
       setSubmitting(true)
 
       if (!db) {
@@ -653,6 +664,8 @@ export default function WithdrawalsClientPage() {
                       <TableHead>Request ID</TableHead>
                       <TableHead>User</TableHead>
                       <TableHead>Amount</TableHead>
+                      <TableHead>Fee</TableHead>
+                      <TableHead>Charge</TableHead>
                       <TableHead>Reason</TableHead>
                       <TableHead>Account Details</TableHead>
                       <TableHead>Request Date</TableHead>
@@ -681,6 +694,8 @@ export default function WithdrawalsClientPage() {
                             <TableCell className="font-medium">{withdrawal.withdrawalRequestId.substring(0, 8).toUpperCase()}</TableCell>
                             <TableCell>{getUserName(withdrawal.userId)}</TableCell>
                             <TableCell className="font-semibold">{formatCurrency(withdrawal.requestAmount)}</TableCell>
+                            <TableCell className="font-semibold">{formatCurrency(withdrawal.totalDeductedAmount - withdrawal.requestAmount)}</TableCell>
+                            <TableCell className="font-semibold">{withdrawal.breakingFeePercentage * 100}%</TableCell>
                             <TableCell className="max-w-32 truncate">{withdrawal.narration}</TableCell>
                             <TableCell className="text-sm">{withdrawal.destinationBankName} - {withdrawal.destinationBankAccountNumber}</TableCell>
                             <TableCell>
@@ -969,6 +984,10 @@ export default function WithdrawalsClientPage() {
                         </Badge>
                       </div>
                       <div className="flex justify-between text-xs">
+                        <span>Available in Savings:</span>
+                        <span className="font-medium">₦{selectedPlan.actualAmount.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
                         <span>Request Amount:</span>
                         <span className="font-medium">₦{requestAmount.toLocaleString()}</span>
                       </div>
@@ -979,10 +998,6 @@ export default function WithdrawalsClientPage() {
                       <div className="flex justify-between text-xs border-t pt-2">
                         <span className="font-medium">Total Deducted:</span>
                         <span className="font-semibold">₦{details.totalDeducted.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </div>
-                      <div className="flex justify-between text-xs">
-                        <span>Available in Savings:</span>
-                        <span className="font-medium">₦{selectedPlan.actualAmount.toLocaleString()}</span>
                       </div>
                       {details.hasSufficientFunds && !details.isPartialWithdrawal && (
                         <div className="flex justify-between text-xs border-t pt-2">
