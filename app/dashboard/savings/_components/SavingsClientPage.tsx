@@ -9,11 +9,27 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Progress } from "@/components/ui/progress"
-import { Search, Plus, Loader2, PiggyBank, Target, TrendingUp, Users } from "lucide-react"
+import { Search, Plus, Loader2, MoreVertical, Trash2 } from "lucide-react"
 import { useState, useEffect } from "react"
 import { db } from "@/lib/firebase_config"
-import { collection, getDocs, query, orderBy, Timestamp, addDoc, serverTimestamp } from "firebase/firestore"
+import { collection, getDocs, query, orderBy, Timestamp, addDoc, serverTimestamp, deleteDoc, doc } from "firebase/firestore"
 import { toast, Toaster } from "react-hot-toast"
 import { v4 as uuidv4 } from "uuid"
 
@@ -57,6 +73,7 @@ export function SavingsClientPage() {
     const [allUsers, setAllUsers] = useState<User[]>([])
     const [loading, setLoading] = useState(true)
     const [submitting, setSubmitting] = useState(false)
+    const [planToDelete, setPlanToDelete] = useState<SavingsPlan | null>(null)
 
     const [newSavings, setNewSavings] = useState({
         userId: "",
@@ -235,6 +252,31 @@ export function SavingsClientPage() {
         }
     }
 
+    const handleDeleteSavings = async () => {
+        if (!planToDelete || !db) return
+
+        try {
+            await deleteDoc(doc(db, "savings", planToDelete.id))
+
+            toast.success(`Savings plan "${planToDelete.savingsName}" deleted successfully!`)
+
+            // Refresh savings plans
+            const savingsRef = collection(db, "savings")
+            const savingsQuery = query(savingsRef, orderBy("createdAt", "desc"))
+            const savingsSnapshot = await getDocs(savingsQuery)
+            const savingsData = savingsSnapshot.docs.map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+            })) as SavingsPlan[]
+            setSavingsPlans(savingsData)
+
+            setPlanToDelete(null)
+        } catch (error: any) {
+            console.error("Error deleting savings plan:", error)
+            toast.error(`Failed to delete savings plan: ${error.message}`)
+        }
+    }
+
     const getStatusBadge = (status: string) => {
         switch (status) {
             case "active":
@@ -348,19 +390,20 @@ export function SavingsClientPage() {
                                     <TableHead>Frequency</TableHead>
                                     <TableHead>Duration</TableHead>
                                     <TableHead>Status</TableHead>
+                                    <TableHead>Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {loading ? (
                                     <TableRow>
-                                        <TableCell colSpan={8} className="text-center py-10">
+                                        <TableCell colSpan={9} className="text-center py-10">
                                             <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
                                             <p className="text-sm text-muted-foreground mt-2">Loading savings plans...</p>
                                         </TableCell>
                                     </TableRow>
                                 ) : filteredPlans.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={8} className="text-center py-10">
+                                        <TableCell colSpan={9} className="text-center py-10">
                                             <p className="text-sm text-muted-foreground">No savings plans found</p>
                                         </TableCell>
                                     </TableRow>
@@ -387,6 +430,24 @@ export function SavingsClientPage() {
                                                 </TableCell>
                                                 <TableCell>{plan.duration}</TableCell>
                                                 <TableCell>{getStatusBadge(plan.status)}</TableCell>
+                                                <TableCell>
+                                                    <DropdownMenu>
+                                                        <DropdownMenuTrigger asChild>
+                                                            <Button variant="ghost" size="sm">
+                                                                <MoreVertical className="h-4 w-4" />
+                                                            </Button>
+                                                        </DropdownMenuTrigger>
+                                                        <DropdownMenuContent align="end">
+                                                            <DropdownMenuItem
+                                                                onClick={() => setPlanToDelete(plan)}
+                                                                className="text-destructive focus:text-destructive"
+                                                            >
+                                                                <Trash2 className="h-4 w-4 mr-2" />
+                                                                Delete
+                                                            </DropdownMenuItem>
+                                                        </DropdownMenuContent>
+                                                    </DropdownMenu>
+                                                </TableCell>
                                             </TableRow>
                                         )
                                     })
@@ -518,6 +579,37 @@ export function SavingsClientPage() {
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
+
+                {/* Delete Confirmation Dialog */}
+                <AlertDialog open={!!planToDelete} onOpenChange={() => setPlanToDelete(null)}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Delete Savings Plan</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                Are you sure you want to delete this savings plan? This action cannot be undone.
+                                {planToDelete && (
+                                    <div className="mt-4 p-3 bg-muted rounded-lg">
+                                        <div className="text-sm font-medium text-foreground">
+                                            {planToDelete.savingsName}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground">
+                                            User: {getUserName(planToDelete.userId)}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground">
+                                            Current Balance: {formatCurrency(planToDelete.actualAmount)}
+                                        </div>
+                                    </div>
+                                )}
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleDeleteSavings} className="bg-destructive hover:bg-destructive/90">
+                                Delete
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </div>
         </DashboardLayout>
     )
