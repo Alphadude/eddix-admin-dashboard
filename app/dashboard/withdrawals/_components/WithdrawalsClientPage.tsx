@@ -150,6 +150,8 @@ export default function WithdrawalsClientPage() {
         hasSufficientFunds: false,
         maxWithdrawable: 0,
         remainingBalance: 0,
+        actualAmountReceived: 0,
+        isPartialWithdrawal: false,
         endDate: null
       }
     }
@@ -157,18 +159,27 @@ export default function WithdrawalsClientPage() {
     const isCompleted = isPlanCompleted(plan)
     const feePercentage = isCompleted ? COMPLETED_PLAN_FEE_PERCENTAGE : BROKEN_PLAN_FEE_PERCENTAGE
     const fee = requestAmount * feePercentage
-    const totalDeducted = requestAmount + fee
 
-    // Check if actualAmount can cover BOTH the requested amount AND the fee
-    // Fee is deducted first, then user receives the requested amount
-    const hasSufficientFunds = plan.actualAmount >= totalDeducted
+    // Primary validation: Check if requested amount exceeds available balance
+    const hasSufficientFunds = requestAmount <= plan.actualAmount
 
-    // Maximum amount user can request (after fee deduction)
-    // If user requests this amount, fee will be deducted and they'll receive this exact amount
-    const maxWithdrawable = plan.actualAmount / (1 + feePercentage)
+    // Fee is deducted from balance first
+    const balanceAfterFee = plan.actualAmount - fee
+
+    // User receives the minimum of: requested amount OR balance after fee
+    const actualAmountReceived = hasSufficientFunds ? Math.min(requestAmount, balanceAfterFee) : 0
+
+    // Total deducted from savings = fee + actual amount received
+    const totalDeducted = fee + actualAmountReceived
+
+    // Maximum amount user can withdraw is their actual balance
+    const maxWithdrawable = plan.actualAmount
 
     // Remaining balance after withdrawal
-    const remainingBalance = hasSufficientFunds ? plan.actualAmount - totalDeducted : 0
+    const remainingBalance = hasSufficientFunds ? plan.actualAmount - totalDeducted : plan.actualAmount
+
+    // Partial withdrawal if user receives less than requested OR balance remains
+    const isPartialWithdrawal = actualAmountReceived < requestAmount || remainingBalance > 0
 
     return {
       isCompleted,
@@ -178,6 +189,8 @@ export default function WithdrawalsClientPage() {
       hasSufficientFunds,
       maxWithdrawable,
       remainingBalance,
+      actualAmountReceived,
+      isPartialWithdrawal,
       endDate: calculateEndDate(plan.startDate, plan.duration)
     }
   }
@@ -391,7 +404,9 @@ export default function WithdrawalsClientPage() {
       setSubmitting(false)
     }
   }
-
+  const generateTransactionRef = (prefix = "TXN") => {
+    return `${prefix}-${uuidv4()}`;
+  };
   const handleInitiateWithdrawal = async () => {
     // Validate required fields
     if (!newWithdrawal.userId || !newWithdrawal.savingsId || !newWithdrawal.requestAmount ||
@@ -417,13 +432,16 @@ export default function WithdrawalsClientPage() {
       const requestAmount = parseFloat(newWithdrawal.requestAmount)
       const withdrawalDetails = calculateWithdrawalDetails(selectedPlan, requestAmount)
 
-      // Validate sufficient funds (check if actualAmount can cover requestAmount + fee)
+      // Validate sufficient funds (check if requested amount exceeds balance)
       if (!withdrawalDetails.hasSufficientFunds) {
         toast.error(
-          `Insufficient funds! Maximum withdrawable: ₦${withdrawalDetails.maxWithdrawable.toLocaleString(undefined, {
+          `Insufficient funds! You're requesting ₦${requestAmount.toLocaleString(undefined, {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2
-          })} (after ${(withdrawalDetails.feePercentage * 100).toFixed(0)}% fee)`
+          })} but only have ₦${selectedPlan.actualAmount.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+          })} available.`
         )
         setSubmitting(false)
         return
@@ -431,9 +449,13 @@ export default function WithdrawalsClientPage() {
 
       const withdrawalRequestId = uuidv4()
 
-      // The user receives the requested amount
-      // The fee is deducted from their savings
-      const totalTransferableAmount = requestAmount
+      // Generate Unique Withdrawal Reference
+      const bulkTransactionRef = generateTransactionRef("BKTXN");
+      const requestedTransactionRef = generateTransactionRef("RQTXN");
+      const breakTransactionRef = generateTransactionRef("BRTXN");
+
+      // User receives the actual amount (may be less than requested in partial withdrawals)
+      const totalTransferableAmount = withdrawalDetails.actualAmountReceived
 
       const withdrawalData = {
         withdrawalRequestId,
@@ -449,11 +471,12 @@ export default function WithdrawalsClientPage() {
         status: "pending",
         approvedBy: null,
         rejectedBy: null,
-        requestedTransferRef: null,
-        bulkRef: null,
-        breakingFeeRef: null,
+        requestedTransferRef: requestedTransactionRef,
+        bulkRef: bulkTransactionRef,
+        breakingFeeRef: breakTransactionRef,
         breakingFeePercentage: withdrawalDetails.feePercentage,
         isPlanCompleted: withdrawalDetails.isCompleted,
+        isPartialWithdrawal: withdrawalDetails.isPartialWithdrawal,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }
@@ -920,10 +943,23 @@ export default function WithdrawalsClientPage() {
                         <span>Available in Savings:</span>
                         <span className="font-medium">₦{selectedPlan.actualAmount.toLocaleString()}</span>
                       </div>
-                      {details.hasSufficientFunds && (
+                      {details.hasSufficientFunds && !details.isPartialWithdrawal && (
                         <div className="flex justify-between text-xs border-t pt-2">
                           <span className="text-muted-foreground">Remaining Balance:</span>
                           <span className="font-medium">₦{details.remainingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                      {details.hasSufficientFunds && details.isPartialWithdrawal && details.actualAmountReceived < requestAmount && (
+                        <div className="mt-2 p-2 bg-warning/10 border border-warning/20 rounded text-xs">
+                          <div className="flex items-start gap-2">
+                            <span className="text-warning font-medium">⚠ Partial Withdrawal</span>
+                          </div>
+                          <div className="mt-1 text-warning/80">
+                            After deducting the {(details.feePercentage * 100).toFixed(0)}% fee (₦{details.fee.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}), you'll receive ₦{details.actualAmountReceived.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (not ₦{requestAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                          </div>
+                          <div className="text-xs text-warning/70 mt-1">
+                            Final savings balance: ₦{details.remainingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
                         </div>
                       )}
                       {!details.hasSufficientFunds && (
@@ -932,17 +968,14 @@ export default function WithdrawalsClientPage() {
                             <span className="text-destructive font-medium">⚠ Insufficient Funds!</span>
                           </div>
                           <div className="mt-1 text-destructive/80">
-                            Maximum withdrawable: ₦{details.maxWithdrawable.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </div>
-                          <div className="text-xs text-destructive/70 mt-1">
-                            (After {(details.feePercentage * 100).toFixed(0)}% fee, you need ₦{details.totalDeducted.toLocaleString()} total)
+                            You're requesting ₦{requestAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} but only have ₦{selectedPlan.actualAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} available.
                           </div>
                         </div>
                       )}
                       {details.hasSufficientFunds && (
                         <div className="flex justify-between text-xs border-t pt-2">
                           <span className="font-medium text-success">You'll Receive:</span>
-                          <span className="font-semibold text-success">₦{requestAmount.toLocaleString()}</span>
+                          <span className="font-semibold text-success">₦{details.actualAmountReceived.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       )}
                     </div>
