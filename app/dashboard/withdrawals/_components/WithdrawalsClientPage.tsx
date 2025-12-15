@@ -375,13 +375,36 @@ export default function WithdrawalsClientPage() {
         })
         toast.success(`Withdrawal request approved successfully!`)
       } else if (actionType === "decline") {
+        // Update withdrawal request status
         await updateDoc(withdrawalRef, {
           status: "declined",
           rejectedBy: "Admin User", // TODO: Replace with actual admin user ID
           updatedAt: serverTimestamp(),
           declineReason: declineReason,
         })
-        toast.success(`Withdrawal request declined`)
+
+        // Reverse the deduction - add back the totalDeductedAmount to savings
+        const savingsPlan = savingsPlans.find(plan => plan.savingsId === selectedWithdrawal.savingsId)
+        if (savingsPlan) {
+          const savingsDocRef = doc(db, "savings", savingsPlan.id)
+          const restoredAmount = savingsPlan.actualAmount + selectedWithdrawal.totalDeductedAmount
+
+          await updateDoc(savingsDocRef, {
+            actualAmount: restoredAmount,
+            updatedAt: serverTimestamp()
+          })
+
+          // Refresh savings plans
+          const savingsRef = collection(db, "savings")
+          const savingsSnapshot = await getDocs(savingsRef)
+          const savingsData = savingsSnapshot.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+          })) as SavingsPlan[]
+          setSavingsPlans(savingsData)
+        }
+
+        toast.success(`Withdrawal request declined and funds restored`)
       }
 
       // Refresh data
@@ -483,6 +506,15 @@ export default function WithdrawalsClientPage() {
 
       await addDoc(collection(db, "withdrawalRequests"), withdrawalData)
 
+      // Deduct the total amount from savings plan's actualAmount
+      const savingsDocRef = doc(db, "savings", selectedPlan.id)
+      const newActualAmount = selectedPlan.actualAmount - withdrawalDetails.totalDeducted
+
+      await updateDoc(savingsDocRef, {
+        actualAmount: newActualAmount,
+        updatedAt: serverTimestamp()
+      })
+
       toast.success("Withdrawal request created successfully!")
 
       // Refresh withdrawal requests
@@ -494,6 +526,15 @@ export default function WithdrawalsClientPage() {
         ...doc.data(),
       })) as WithdrawalRequest[]
       setWithdrawalRequests(withdrawalsData)
+
+      // Refresh savings plans to reflect updated balance
+      const savingsRef = collection(db, "savings")
+      const savingsSnapshot = await getDocs(savingsRef)
+      const savingsData = savingsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as SavingsPlan[]
+      setSavingsPlans(savingsData)
 
       // Reset form
       setNewWithdrawal({
