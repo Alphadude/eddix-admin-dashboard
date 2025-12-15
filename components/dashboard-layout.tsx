@@ -17,6 +17,7 @@ import {
   LogOut,
   ChevronDown,
   PiggyBank,
+  Building2,
 } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
@@ -28,6 +29,7 @@ const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Users", href: "/dashboard/users", icon: Users },
   { name: "Savings", href: "/dashboard/savings", icon: PiggyBank },
+  { name: "Banks", href: "/dashboard/banks", icon: Building2 },
   { name: "Contributions", href: "/dashboard/contributions", icon: TrendingUp },
   { name: "Withdrawals", href: "/dashboard/withdrawals", icon: TrendingDown },
   { name: "Notifications", href: "/dashboard/notifications", icon: Bell },
