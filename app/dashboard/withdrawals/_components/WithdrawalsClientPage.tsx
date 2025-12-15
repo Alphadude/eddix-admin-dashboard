@@ -467,7 +467,7 @@ export default function WithdrawalsClientPage() {
         destinationBankName: newWithdrawal.destinationBankName,
         destinationBankAccountNumber: newWithdrawal.destinationBankAccountNumber,
         destinationBankCode: newWithdrawal.destinationBankCode,
-        narration: newWithdrawal.narration,
+        narration: newWithdrawal.narration || "Withdrawal Request",
         status: "pending",
         approvedBy: null,
         rejectedBy: null,
