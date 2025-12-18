@@ -21,47 +21,262 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts"
-import { Download, TrendingUp, TrendingDown, Users, DollarSign, Calendar } from "lucide-react"
-import { useState } from "react"
+import { Download, TrendingUp, TrendingDown, Users, DollarSign, Loader2, ArrowDownToLine } from "lucide-react"
+import { useState, useEffect } from "react"
+import { db } from "@/lib/firebase_config"
+import { collection, getDocs, query, where, Timestamp } from "firebase/firestore"
+import { toast, Toaster } from "react-hot-toast"
+import { generatePDFReport } from "@/lib/pdfReportGenerator"
 
-const contributionData = [
-  { month: "Jan", amount: 2400000, users: 120 },
-  { month: "Feb", amount: 2800000, users: 145 },
-  { month: "Mar", amount: 3200000, users: 167 },
-  { month: "Apr", amount: 2900000, users: 156 },
-  { month: "May", amount: 3800000, users: 189 },
-  { month: "Jun", amount: 4200000, users: 203 },
-]
 
-const withdrawalData = [
-  { month: "Jan", amount: 800000, requests: 45 },
-  { month: "Feb", amount: 950000, requests: 52 },
-  { month: "Mar", amount: 1200000, requests: 67 },
-  { month: "Apr", amount: 1100000, requests: 61 },
-  { month: "May", amount: 1400000, requests: 78 },
-  { month: "Jun", amount: 1600000, requests: 89 },
-]
+// Interfaces
+interface WithdrawalRequest {
+  id: string
+  requestAmount: number
+  totalDeductedAmount: number
+  totalTransferableAmount: number
+  status: string
+  createdAt: Timestamp
+}
 
-const userEngagementData = [
-  { name: "Weekly Contributors", value: 65, color: "#3b82f6" },
-  { name: "Monthly Contributors", value: 25, color: "#10b981" },
-  { name: "Bi-weekly Contributors", value: 10, color: "#f59e0b" },
-]
+interface User {
+  uid: string
+  accountActivated: boolean
+  activationAmount: number
+  createdAt: Timestamp
+}
 
-const feesData = [
-  { month: "Jan", fees: 120000 },
-  { month: "Feb", fees: 140000 },
-  { month: "Mar", fees: 160000 },
-  { month: "Apr", fees: 145000 },
-  { month: "May", fees: 190000 },
-  { month: "Jun", fees: 210000 },
-]
+interface Transaction {
+  id: string
+  userId: string
+  type: string
+  status: string
+  amount: number
+  createdAt: Timestamp
+}
+
+interface ChartDataPoint {
+  month: string
+  amount: number
+}
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 export default function ReportsClientPage() {
-  const [timeRange, setTimeRange] = useState("6months")
+  const currentYear = new Date().getFullYear()
+  const [selectedYear, setSelectedYear] = useState(currentYear)
+  const [loading, setLoading] = useState(true)
+
+  // Metrics state
+  const [totalRevenue, setTotalRevenue] = useState(0)
+  const [activeUsers, setActiveUsers] = useState(0)
+  const [feesEarned, setFeesEarned] = useState(0)
+  const [withdrawalRate, setWithdrawalRate] = useState(0)
+
+  // Chart data state
+  const [contributionGrowth, setContributionGrowth] = useState<ChartDataPoint[]>([])
+  const [withdrawalFrequency, setWithdrawalFrequency] = useState<ChartDataPoint[]>([])
+  const [userEngagement, setUserEngagement] = useState({ weekly: 0, biweekly: 0, monthly: 0 })
+  const [feesEarnedByMonth, setFeesEarnedByMonth] = useState<ChartDataPoint[]>([])
+
+  // Available years for filter
+  const [availableYears, setAvailableYears] = useState<number[]>([])
+
+  // Helper function to format currency
+  const formatCurrency = (amount: number) => {
+    return `₦${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  }
+
+  // Helper function to group data by month
+  const groupByMonth = (data: any[], year: number, amountField: string) => {
+    const monthlyData: { [key: number]: number } = {}
+
+    // Initialize all months with 0
+    for (let i = 0; i < 12; i++) {
+      monthlyData[i] = 0
+    }
+
+    data.forEach(item => {
+      const date = item.createdAt.toDate()
+      if (date.getFullYear() === year) {
+        const month = date.getMonth()
+        monthlyData[month] += item[amountField] || 0
+      }
+    })
+
+    return MONTH_NAMES.map((month, index) => ({
+      month,
+      amount: monthlyData[index]
+    }))
+  }
+
+  // Fetch all data
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        if (!db) {
+          console.error("Firebase not initialized")
+          setLoading(false)
+          return
+        }
+
+        // Fetch withdrawal requests
+        const withdrawalsRef = collection(db, "withdrawalRequests")
+        const withdrawalsSnapshot = await getDocs(withdrawalsRef)
+        const withdrawals = withdrawalsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as WithdrawalRequest[]
+
+        // Fetch users
+        const usersRef = collection(db, "users")
+        const usersSnapshot = await getDocs(usersRef)
+        const users = usersSnapshot.docs.map(doc => ({
+          uid: doc.id,
+          ...doc.data()
+        })) as User[]
+
+        // Fetch transactions
+        const transactionsRef = collection(db, "transactions")
+        const transactionsSnapshot = await getDocs(transactionsRef)
+        const transactions = transactionsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Transaction[]
+
+        // Calculate Total Revenue
+        const approvedWithdrawals = withdrawals.filter(w => w.status === "approved")
+        const withdrawalFees = approvedWithdrawals.reduce((sum, w) =>
+          sum + (w.totalDeductedAmount - w.totalTransferableAmount), 0
+        )
+        const activatedUsers = users.filter(u => u.accountActivated === true)
+        const activationFees = activatedUsers.reduce((sum, u) =>
+          sum + (u.activationAmount || 0), 0
+        )
+        setTotalRevenue(withdrawalFees + activationFees)
+
+        // Calculate Active Users
+        setActiveUsers(activatedUsers.length)
+
+        // Calculate Fees Earned
+        setFeesEarned(withdrawalFees)
+
+        // Calculate Withdrawal Rate (Approval Success Rate)
+        const totalWithdrawals = withdrawals.length
+        const approvedCount = approvedWithdrawals.length
+        setWithdrawalRate(totalWithdrawals > 0 ? (approvedCount / totalWithdrawals) * 100 : 0)
+
+        // Get available years from transactions
+        const years = new Set<number>()
+        transactions.forEach(t => {
+          if (t.createdAt) {
+            years.add(t.createdAt.toDate().getFullYear())
+          }
+        })
+        withdrawals.forEach(w => {
+          if (w.createdAt) {
+            years.add(w.createdAt.toDate().getFullYear())
+          }
+        })
+        const yearsArray = Array.from(years).sort((a, b) => b - a)
+        setAvailableYears(yearsArray.length > 0 ? yearsArray : [currentYear])
+
+        // Calculate Contribution Growth (by year)
+        const creditTransactions = transactions.filter(t =>
+          t.type === "credit" && t.status === "completed"
+        )
+        setContributionGrowth(groupByMonth(creditTransactions, selectedYear, "amount"))
+
+        // Calculate Withdrawal Frequency (by year)
+        const approvedWithdrawalsByYear = approvedWithdrawals.filter(w =>
+          w.createdAt && w.createdAt.toDate().getFullYear() === selectedYear
+        )
+        setWithdrawalFrequency(groupByMonth(approvedWithdrawalsByYear, selectedYear, "totalTransferableAmount"))
+
+        // Calculate User Engagement
+        const now = new Date()
+        const completedCredits = transactions.filter(t =>
+          t.type === "credit" && t.status === "completed"
+        )
+
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+        const biweekAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
+        const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+
+        const weeklyUsers = new Set(
+          completedCredits
+            .filter(t => t.createdAt.toDate() >= weekAgo)
+            .map(t => t.userId)
+        ).size
+
+        const biweeklyUsers = new Set(
+          completedCredits
+            .filter(t => t.createdAt.toDate() >= biweekAgo)
+            .map(t => t.userId)
+        ).size
+
+        const monthlyUsers = new Set(
+          completedCredits
+            .filter(t => t.createdAt.toDate() >= monthAgo)
+            .map(t => t.userId)
+        ).size
+
+        setUserEngagement({ weekly: weeklyUsers, biweekly: biweeklyUsers, monthly: monthlyUsers })
+
+        // Calculate Fees Earned by Month
+        const feesData = approvedWithdrawalsByYear.map(w => ({
+          ...w,
+          feeAmount: w.totalDeductedAmount - w.totalTransferableAmount
+        }))
+        setFeesEarnedByMonth(groupByMonth(feesData, selectedYear, "feeAmount"))
+
+        setLoading(false)
+      } catch (error) {
+        console.error("Error fetching data:", error)
+        toast.error("Failed to load reports data")
+        setLoading(false)
+      }
+    }
+
+    fetchData()
+  }, [selectedYear, currentYear])
+
+  // Prepare user engagement pie chart data
+  const userEngagementData = [
+    { name: "Weekly Contributors", value: userEngagement.weekly, color: "#3b82f6" },
+    { name: "Bi-weekly Contributors", value: userEngagement.biweekly, color: "#f59e0b" },
+    { name: "Monthly Contributors", value: userEngagement.monthly, color: "#10b981" },
+  ]
+
+  // Handle PDF Export
+  const handleExportReport = async () => {
+    try {
+      toast.loading("Generating PDF report...")
+
+      await generatePDFReport({
+        year: selectedYear,
+        totalRevenue,
+        activeUsers,
+        feesEarned,
+        withdrawalRate,
+        contributionGrowth,
+        withdrawalFrequency,
+        userEngagement,
+        feesEarnedByMonth,
+      })
+
+      toast.dismiss()
+      toast.success("Report downloaded successfully!")
+    } catch (error) {
+      console.error("Error generating PDF:", error)
+      toast.dismiss()
+      toast.error("Failed to generate PDF report")
+    }
+  }
 
   return (
     <DashboardLayout>
+      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -72,19 +287,7 @@ export default function ReportsClientPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={timeRange} onValueChange={setTimeRange}>
-              <SelectTrigger className="w-40">
-                <Calendar className="h-4 w-4 mr-2" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1month">Last Month</SelectItem>
-                <SelectItem value="3months">Last 3 Months</SelectItem>
-                <SelectItem value="6months">Last 6 Months</SelectItem>
-                <SelectItem value="1year">Last Year</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline">
+            <Button variant="outline" onClick={handleExportReport} disabled={loading}>
               <Download className="h-4 w-4 mr-2" />
               Export Report
             </Button>
@@ -101,8 +304,14 @@ export default function ReportsClientPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">₦18.5M</div>
-              <div className="text-xs text-success">+15.2% from last period</div>
+              {loading ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold">{formatCurrency(totalRevenue)}</div>
+                  <div className="text-xs text-muted-foreground">Withdrawal + Activation fees</div>
+                </>
+              )}
             </CardContent>
           </Card>
           <Card>
@@ -113,8 +322,14 @@ export default function ReportsClientPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">1,847</div>
-              <div className="text-xs text-success">+8.7% growth rate</div>
+              {loading ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold">{activeUsers.toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground">Account activated</div>
+                </>
+              )}
             </CardContent>
           </Card>
           <Card>
@@ -125,20 +340,32 @@ export default function ReportsClientPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">₦1.2M</div>
-              <div className="text-xs text-success">+12.3% increase</div>
+              {loading ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold">{formatCurrency(feesEarned)}</div>
+                  <div className="text-xs text-muted-foreground">From withdrawals</div>
+                </>
+              )}
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingDown className="h-4 w-4" />
+                <ArrowDownToLine className="h-4 w-4" />
                 Withdrawal Rate
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">18.5%</div>
-              <div className="text-xs text-muted-foreground">Within normal range</div>
+              {loading ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold">{withdrawalRate.toFixed(1)}%</div>
+                  <div className="text-xs text-muted-foreground">Approval success rate</div>
+                </>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -148,64 +375,98 @@ export default function ReportsClientPage() {
           {/* Contribution Growth */}
           <Card>
             <CardHeader>
-              <CardTitle>Contribution Growth</CardTitle>
-              <CardDescription>Monthly contribution trends and user participation</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Contribution Growth</CardTitle>
+                  <CardDescription>Monthly contribution trends</CardDescription>
+                </div>
+                <Select value={selectedYear.toString()} onValueChange={(value) => setSelectedYear(parseInt(value))}>
+                  <SelectTrigger className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableYears.map(year => (
+                      <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={contributionData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
-                  <YAxis stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                    formatter={(value, name) => [
-                      name === "amount" ? `₦${(value as number).toLocaleString()}` : value,
-                      name === "amount" ? "Amount" : "Users",
-                    ]}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="amount"
-                    stroke="hsl(var(--primary))"
-                    fill="hsl(var(--primary))"
-                    fillOpacity={0.1}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div className="h-[300px] flex items-center justify-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <AreaChart data={contributionGrowth}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                      }}
+                      formatter={(value) => [`₦${(value as number).toLocaleString()}`, "Amount"]}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="amount"
+                      stroke="hsl(var(--primary))"
+                      fill="hsl(var(--primary))"
+                      fillOpacity={0.1}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 
           {/* Withdrawal Frequency */}
           <Card>
             <CardHeader>
-              <CardTitle>Withdrawal Frequency</CardTitle>
-              <CardDescription>Monthly withdrawal requests and amounts</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Withdrawal Frequency</CardTitle>
+                  <CardDescription>Monthly withdrawal amounts</CardDescription>
+                </div>
+                <Select value={selectedYear.toString()} onValueChange={(value) => setSelectedYear(parseInt(value))}>
+                  <SelectTrigger className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableYears.map(year => (
+                      <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={withdrawalData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
-                  <YAxis stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                    formatter={(value, name) => [
-                      name === "amount" ? `₦${(value as number).toLocaleString()}` : value,
-                      name === "amount" ? "Amount" : "Requests",
-                    ]}
-                  />
-                  <Bar dataKey="amount" fill="hsl(var(--chart-2))" />
-                </BarChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div className="h-[300px] flex items-center justify-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={withdrawalFrequency}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                      }}
+                      formatter={(value) => [`₦${(value as number).toLocaleString()}`, "Amount"]}
+                    />
+                    <Bar dataKey="amount" fill="hsl(var(--chart-2))" />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 
@@ -213,130 +474,94 @@ export default function ReportsClientPage() {
           <Card>
             <CardHeader>
               <CardTitle>User Engagement</CardTitle>
-              <CardDescription>Distribution of user contribution frequencies</CardDescription>
+              <CardDescription>Active contributors by period</CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={userEngagementData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={120}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {userEngagementData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                    formatter={(value) => [`${value}%`, "Percentage"]}
-                  />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div className="h-[300px] flex items-center justify-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={userEngagementData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={120}
+                      paddingAngle={5}
+                      dataKey="value"
+                      label={(entry) => `${entry.value} users`}
+                    >
+                      {userEngagementData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                      }}
+                      formatter={(value) => [`${value} users`, "Count"]}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 
           {/* Fees Earned */}
           <Card>
             <CardHeader>
-              <CardTitle>Fees Earned</CardTitle>
-              <CardDescription>Monthly platform fees and commission revenue</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Fees Earned</CardTitle>
+                  <CardDescription>Monthly platform fees</CardDescription>
+                </div>
+                <Select value={selectedYear.toString()} onValueChange={(value) => setSelectedYear(parseInt(value))}>
+                  <SelectTrigger className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableYears.map(year => (
+                      <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={feesData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
-                  <YAxis stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                    }}
-                    formatter={(value) => [`₦${(value as number).toLocaleString()}`, "Fees"]}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="fees"
-                    stroke="hsl(var(--chart-3))"
-                    strokeWidth={3}
-                    dot={{ fill: "hsl(var(--chart-3))", strokeWidth: 2, r: 4 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Summary Cards */}
-        <div className="grid gap-6 md:grid-cols-3">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Performance Summary</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Average Monthly Growth</span>
-                <span className="font-semibold text-success">+12.8%</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">User Retention Rate</span>
-                <span className="font-semibold">94.2%</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Platform Uptime</span>
-                <span className="font-semibold text-success">99.9%</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Risk Metrics</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Default Rate</span>
-                <span className="font-semibold text-success">0.8%</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Fraud Detection</span>
-                <span className="font-semibold text-success">99.7%</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Compliance Score</span>
-                <span className="font-semibold text-success">A+</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Operational Efficiency</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Avg. Processing Time</span>
-                <span className="font-semibold">2.4 hours</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Customer Satisfaction</span>
-                <span className="font-semibold text-success">4.8/5</span>
-              </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">Support Response</span>
-                <span className="font-semibold">&lt; 1 hour</span>
-              </div>
+              {loading ? (
+                <div className="h-[300px] flex items-center justify-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={feesEarnedByMonth}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                    <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                      }}
+                      formatter={(value) => [`₦${(value as number).toLocaleString()}`, "Fees"]}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="amount"
+                      stroke="hsl(var(--chart-3))"
+                      strokeWidth={3}
+                      dot={{ fill: "hsl(var(--chart-3))", strokeWidth: 2, r: 4 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </div>

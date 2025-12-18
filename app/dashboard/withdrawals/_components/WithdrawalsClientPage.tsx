@@ -22,10 +22,31 @@ import {
 import { Search, Download, Check, X, Eye, Clock, ArrowDownToLine, Loader2 } from "lucide-react"
 import { useState, useEffect } from "react"
 import { db } from "@/lib/firebase_config"
-import { collection, getDocs, query, orderBy, Timestamp, where, updateDoc, doc, serverTimestamp, addDoc } from "firebase/firestore"
+import {
+  collection,
+  getDocs,
+  query,
+  orderBy,
+  Timestamp,
+  updateDoc,
+  doc,
+  serverTimestamp,
+  addDoc,
+  where,
+} from "firebase/firestore"
 import { toast, Toaster } from "react-hot-toast"
 import { formatDistanceToNow } from "date-fns"
 import { v4 as uuidv4 } from "uuid"
+import {
+  initiateSingleTransfer,
+  getSingleTransferStatus,
+  getWalletBalance,
+  formatMonnifyError,
+  isTransferSuccessful,
+  MONNIFY_ACCOUNT_NUMBER,
+  authorizeSingleTransfer,
+  resendOTP
+} from "@/lib/monnifyService"
 
 interface WithdrawalRequest {
   id: string
@@ -48,6 +69,10 @@ interface WithdrawalRequest {
   requestedTransferRef: string | null
   bulkRef: string | null
   breakingFeeRef: string | null
+  isInitialized?: boolean
+  monnifyTransferReference?: string
+  monnifyTransferStatus?: string
+  transactionId?: string
 }
 
 interface User {
@@ -111,6 +136,20 @@ export default function WithdrawalsClientPage() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [loadingBankDetails, setLoadingBankDetails] = useState(false)
+
+  // Monnify transfer state
+  const [processingTransfer, setProcessingTransfer] = useState(false)
+  const [transferStatus, setTransferStatus] = useState<string>("")
+
+  // OTP Authorization state
+  const [showOTPDialog, setShowOTPDialog] = useState(false)
+  const [otpCode, setOtpCode] = useState("")
+  const [withdrawalForAuth, setWithdrawalForAuth] = useState<WithdrawalRequest | null>(null)
+  const [resendingOTP, setResendingOTP] = useState(false)
+
+  // Reversal confirmation state
+  const [showReverseDialog, setShowReverseDialog] = useState(false)
+  const [withdrawalToReverse, setWithdrawalToReverse] = useState<WithdrawalRequest | null>(null)
 
   // Helper function to parse duration string
   const parseDuration = (duration: string): { value: number; unit: string } => {
@@ -206,6 +245,30 @@ export default function WithdrawalsClientPage() {
       actualAmountReceived,
       isPartialWithdrawal,
       endDate: calculateEndDate(plan.startDate, plan.duration)
+    }
+  }
+
+  // Reusable function to fetch withdrawal requests
+  const fetchWithdrawalRequests = async () => {
+    try {
+      if (!db) {
+        console.error("Firebase not initialized")
+        return
+      }
+
+      const withdrawalsRef = collection(db, "withdrawalRequests")
+      const withdrawalsQuery = query(withdrawalsRef, orderBy("createdAt", "desc"))
+      const withdrawalsSnapshot = await getDocs(withdrawalsQuery)
+
+      const withdrawalsData = withdrawalsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as WithdrawalRequest[]
+
+      setWithdrawalRequests(withdrawalsData)
+    } catch (error) {
+      console.error("Error fetching withdrawal requests:", error)
+      toast.error("Failed to load withdrawal requests")
     }
   }
 
@@ -345,7 +408,7 @@ export default function WithdrawalsClientPage() {
 
   // Filter withdrawals
   const pendingWithdrawals = withdrawalRequests.filter(w => w.status === "pending")
-  const processedWithdrawals = withdrawalRequests.filter(w => w.status === "approved" || w.status === "declined")
+  const processedWithdrawals = withdrawalRequests.filter(w => w.status === "approved" || w.status === "declined" || w.status === "reversed")
 
   // Calculate statistics
   const pendingCount = pendingWithdrawals.length
@@ -411,7 +474,7 @@ export default function WithdrawalsClientPage() {
       case "declined":
         return <Badge variant="destructive">Declined</Badge>
       default:
-        return <Badge variant="outline">{status}</Badge>
+        return <Badge className="bg-gray-100 text-gray-800 border-gray-200" variant="outline">{status}</Badge>
     }
   }
 
@@ -425,6 +488,175 @@ export default function WithdrawalsClientPage() {
     setActionType("decline")
   }
 
+  // Handle OTP Authorization
+  const handleAuthorizeWithdrawal = async () => {
+    if (!withdrawalForAuth || !otpCode.trim()) {
+      toast.error("Please enter the OTP code")
+      return
+    }
+
+    try {
+      setSubmitting(true)
+      setTransferStatus("Authorizing transfer with OTP...")
+
+      // Authorize the transfer with OTP
+      const authResponse = await authorizeSingleTransfer(
+        withdrawalForAuth.requestedTransferRef!,
+        otpCode
+      )
+      if (authResponse.requestSuccessful === false) {
+        toast.error(authResponse.responseMessage)
+        return
+      }
+      console.log("Authorization response:", authResponse)
+
+      // Update withdrawal status to approved
+      const withdrawalRef = doc(db, "withdrawalRequests", withdrawalForAuth.id)
+      await updateDoc(withdrawalRef, {
+        status: "approved",
+        monnifyTransferStatus: authResponse.responseBody.status,
+        transferCompletedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+
+      // Update the linked transaction status from pending to completed
+      if (withdrawalForAuth.transactionId) {
+        const transactionsRef = collection(db, "transactions")
+        const transactionQuery = query(transactionsRef, where("transactionId", "==", withdrawalForAuth.transactionId))
+        const transactionSnapshot = await getDocs(transactionQuery)
+
+        if (!transactionSnapshot.empty) {
+          const transactionDoc = transactionSnapshot.docs[0]
+          await updateDoc(doc(db, "transactions", transactionDoc.id), {
+            status: "completed",
+            monnifyReference: authResponse.responseBody.transactionReference || "",
+            updatedAt: serverTimestamp(),
+          })
+        }
+      }
+
+      toast.success(`Withdrawal authorized successfully! ₦${withdrawalForAuth.totalTransferableAmount.toLocaleString()} transferred.`)
+
+      setShowOTPDialog(false)
+      setOtpCode("")
+      setWithdrawalForAuth(null)
+      await fetchWithdrawalRequests()
+    } catch (error) {
+      console.error("Error authorizing withdrawal:", error)
+      toast.error(`Authorization failed: ${formatMonnifyError(error)}`)
+    } finally {
+      setSubmitting(false)
+      setTransferStatus("")
+    }
+  }
+
+  // Handle Resend OTP
+  const handleResendOTP = async (withdrawal: WithdrawalRequest) => {
+    if (!withdrawal.requestedTransferRef) {
+      toast.error("No transfer reference found")
+      return
+    }
+
+    try {
+      setResendingOTP(true)
+      const resendOTPResponse = await resendOTP(withdrawal.requestedTransferRef)
+      if (resendOTPResponse.responseCode == "D01") {
+        toast.error(resendOTPResponse.responseMessage)
+        return
+      }
+      // console.log("Resend OTP response33:", resendOTPResponse)
+      toast.success(resendOTPResponse.responseMessage)
+    } catch (error) {
+      console.error("Error resending OTP:", error)
+      toast.error(`Failed to resend OTP: ${formatMonnifyError(error)}`)
+    } finally {
+      setResendingOTP(false)
+    }
+  }
+
+  // Handle Manual Reversal - Opens confirmation dialog
+  const handleReverseWithdrawal = (withdrawal: WithdrawalRequest) => {
+    setWithdrawalToReverse(withdrawal)
+    setShowReverseDialog(true)
+  }
+
+  // Confirm and execute the reversal
+  const confirmReversal = async () => {
+    if (!withdrawalToReverse) return
+
+    try {
+      setSubmitting(true)
+      setTransferStatus("Reversing withdrawal...")
+
+      // Reverse the money back to savings plan
+      const savingsSnapshot = await getDocs(query(collection(db, "savings"), where("savingsId", "==", withdrawalToReverse.savingsId)))
+      const savingsDoc = savingsSnapshot.docs[0]
+      const savingsName = savingsDoc.data().savingsName
+      if (!savingsSnapshot.empty) {
+        const currentAmount = savingsDoc.data().actualAmount || 0
+
+        await updateDoc(doc(db, "savings", savingsDoc.id), {
+          actualAmount: currentAmount + withdrawalToReverse.totalDeductedAmount,
+          updatedAt: serverTimestamp(),
+        })
+      }
+
+      // Update the original transaction to failed
+      if (withdrawalToReverse.transactionId) {
+        const transactionsRef = collection(db, "transactions")
+        const transactionQuery = query(transactionsRef, where("transactionId", "==", withdrawalToReverse.transactionId))
+        const transactionSnapshot = await getDocs(transactionQuery)
+
+        if (!transactionSnapshot.empty) {
+          const transactionDoc = transactionSnapshot.docs[0]
+          await updateDoc(doc(db, "transactions", transactionDoc.id), {
+            status: "failed",
+            updatedAt: serverTimestamp(),
+          })
+        }
+      }
+     
+     
+     
+      // Create a reversal credit transaction
+      await addDoc(collection(db, "transactions"), {
+        transactionId: uuidv4(),
+        userId: withdrawalToReverse.userId,
+        type: "credit",
+        amount: withdrawalToReverse.totalTransferableAmount,
+        description: "Reversed: Manual reversal by admin",
+        ref: `REV-${withdrawalToReverse.requestedTransferRef}`,
+        status: "completed",
+        savingsName: savingsName,
+        savingsPlanId: withdrawalToReverse.savingsId,
+        trxMethod: "bank",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+
+      // Update withdrawal status to reversed
+      const withdrawalRef = doc(db, "withdrawalRequests", withdrawalToReverse.id)
+      await updateDoc(withdrawalRef, {
+        status: "reversed",
+        rejectedBy: "Admin - Manual Reversal",
+        updatedAt: serverTimestamp(),
+      })
+
+      toast.success(`Withdrawal reversed successfully! ₦${withdrawalToReverse.totalTransferableAmount.toLocaleString()} returned to savings.`)
+      await fetchWithdrawalRequests()
+
+      // Close dialog and reset state
+      setShowReverseDialog(false)
+      setWithdrawalToReverse(null)
+    } catch (error) {
+      console.error("Error reversing withdrawal:", error)
+      toast.error(`Failed to reverse withdrawal: ${formatMonnifyError(error)}`)
+    } finally {
+      setSubmitting(false)
+      setTransferStatus("")
+    }
+  }
+
   const confirmAction = async () => {
     if (!selectedWithdrawal || !db) return
 
@@ -433,12 +665,101 @@ export default function WithdrawalsClientPage() {
       const withdrawalRef = doc(db, "withdrawalRequests", selectedWithdrawal.id)
 
       if (actionType === "approve") {
-        await updateDoc(withdrawalRef, {
-          status: "approved",
-          approvedBy: "Admin User", // TODO: Replace with actual admin user ID
-          updatedAt: serverTimestamp(),
-        })
-        toast.success(`Withdrawal request approved successfully!`)
+        // Step 1: Check Monnify wallet balance (optional - will warn but not block)
+        setTransferStatus("Checking wallet balance...")
+        try {
+          const walletBalance = await getWalletBalance()
+          const requiredAmount = selectedWithdrawal.totalTransferableAmount
+
+          // Estimate Monnify fee (₦10 for < ₦10k, ₦20 for ₦10k-₦50k, ₦40 for ≥ ₦50k)
+          const estimatedFee = requiredAmount < 10000 ? 10 : requiredAmount < 50000 ? 20 : 40
+          const totalRequired = requiredAmount + estimatedFee
+
+          if (walletBalance.availableBalance < totalRequired) {
+            toast.error(
+              `Warning: Insufficient Monnify wallet balance! Required: ₦${totalRequired.toLocaleString()} (₦${requiredAmount.toLocaleString()} + ₦${estimatedFee} fee), Available: ₦${walletBalance.availableBalance.toLocaleString()}. Transfer will be attempted anyway.`,
+              { duration: 6000 }
+            )
+          } else {
+            toast.success(`Wallet balance confirmed: ₦${walletBalance.availableBalance.toLocaleString()}`)
+          }
+        } catch (balanceError) {
+          console.error("Error checking wallet balance:", balanceError)
+          // Don't block the transfer - just warn the user
+          toast.error(
+            `Could not verify wallet balance: ${formatMonnifyError(balanceError)}. Proceeding with transfer anyway...`,
+            { duration: 5000 }
+          )
+        }
+
+        // Step 2: Initiate Monnify transfer
+        setProcessingTransfer(true)
+        setTransferStatus("Initiating transfer to user...")
+
+        try {
+          const transferResponse = await initiateSingleTransfer({
+            amount: selectedWithdrawal.totalTransferableAmount,
+            reference: selectedWithdrawal.requestedTransferRef!, // Always generate unique reference
+            narration: selectedWithdrawal.narration || "Withdrawal payment",
+            destinationBankCode: selectedWithdrawal.destinationBankCode,
+            destinationAccountNumber: selectedWithdrawal.destinationBankAccountNumber,
+            currency: "NGN",
+            sourceAccountNumber: MONNIFY_ACCOUNT_NUMBER,
+            async: false, // Synchronous transfer for immediate feedback
+          })
+          // console.log("Transfer response:", transferResponse)
+
+          // Step 3: Check transfer status
+          // Check if the API request itself was successful first
+          if (!transferResponse.requestSuccessful) {
+            toast.error(`Transfer failed: ${transferResponse.responseMessage}`)
+            setSubmitting(false)
+            setProcessingTransfer(false)
+            setTransferStatus("")
+            return
+          }
+
+          // const transferSuccessful = isTransferSuccessful(transferResponse.responseBody.status)
+
+          // if (!transferSuccessful && transferResponse.responseBody.status !== "PENDING") {
+          //   // Transfer failed immediately
+          //   toast.error(`Transfer status: ${transferResponse.responseBody.status}`)
+          //   setSubmitting(false)
+          //   setProcessingTransfer(false)
+          //   setTransferStatus("")
+          //   return
+          // }
+
+          // Step 4: Update withdrawal request with transfer details
+          setTransferStatus("Updating withdrawal status...")
+
+          const isPendingAuth = transferResponse.responseBody.status === "PENDING_AUTHORIZATION"
+          // console.log("Transfer response:", transferResponse)
+          await updateDoc(withdrawalRef, {
+            approvedBy: "Admin User", // TODO: Replace with actual admin user ID
+            updatedAt: serverTimestamp(),
+            monnifyTransferReference: transferResponse.responseBody.reference,
+            monnifyTransferStatus: transferResponse.responseBody.status,
+            isInitialized: isPendingAuth ? true : false,
+            transferCompletedAt: isPendingAuth ? null : serverTimestamp(),
+          })
+
+          toast.success(isPendingAuth ?
+            `Withdrawal of ₦${selectedWithdrawal.totalTransferableAmount.toLocaleString()} initialized successfully!`
+            :
+            `Withdrawal of ₦${selectedWithdrawal.totalTransferableAmount.toLocaleString()} approved successfully!`
+          )
+
+          setProcessingTransfer(false)
+          setTransferStatus("")
+        } catch (transferError) {
+          console.error("Error processing transfer:", transferError)
+          toast.error(`Transfer failed: ${formatMonnifyError(transferError)}`)
+          setSubmitting(false)
+          setProcessingTransfer(false)
+          setTransferStatus("")
+          return
+        }
       } else if (actionType === "decline") {
         // Update withdrawal request status
         await updateDoc(withdrawalRef, {
@@ -547,21 +868,39 @@ export default function WithdrawalsClientPage() {
 
       const withdrawalRequestId = uuidv4()
 
-      // Generate Unique Withdrawal Reference
-      const bulkTransactionRef = generateTransactionRef("BKTXN");
-      const requestedTransactionRef = generateTransactionRef("RQTXN");
-      const breakTransactionRef = generateTransactionRef("BRTXN");
-
+      const requestedTransactionRef = `RQTXN-${Date.now()}`
+      const bulkTransactionRef = `BKTXN-${Date.now()}`
+      const breakTransactionRef = `BFTXN-${Date.now()}`
       // User receives the actual amount (may be less than requested in partial withdrawals)
       const totalTransferableAmount = withdrawalDetails.actualAmountReceived
 
+      // Step 1: Create a pending debit transaction first
+      const transactionId = uuidv4()
+      const transactionData = {
+        transactionId,
+        userId: newWithdrawal.userId,
+        type: "debit",
+        amount: withdrawalDetails.actualAmountReceived,
+        description: `Withdrawal: ${newWithdrawal.narration || "Withdrawal Request"}`,
+        ref: requestedTransactionRef,
+        status: "pending",
+        savingsName: selectedPlan.savingsName,
+        savingsPlanId: selectedPlan.savingsId,
+        trxMethod: "bank",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }
+
+      await addDoc(collection(db, "transactions"), transactionData)
+
+      // Step 2: Create withdrawal request with transaction ID
       const withdrawalData = {
-        withdrawalRequestId,
+        withdrawalRequestId: uuidv4(),
         userId: newWithdrawal.userId,
         savingsId: newWithdrawal.savingsId,
-        requestAmount,
+        requestAmount: parseFloat(newWithdrawal.requestAmount),
         totalDeductedAmount: withdrawalDetails.totalDeducted,
-        totalTransferableAmount,
+        totalTransferableAmount: withdrawalDetails.actualAmountReceived,
         destinationBankName: newWithdrawal.destinationBankName,
         destinationBankAccountNumber: newWithdrawal.destinationBankAccountNumber,
         destinationBankCode: newWithdrawal.destinationBankCode,
@@ -575,6 +914,8 @@ export default function WithdrawalsClientPage() {
         breakingFeePercentage: withdrawalDetails.feePercentage,
         isPlanCompleted: withdrawalDetails.isCompleted,
         isPartialWithdrawal: withdrawalDetails.isPartialWithdrawal,
+        isInitialized: false,
+        transactionId, // Link to the transaction
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }
@@ -825,12 +1166,49 @@ export default function WithdrawalsClientPage() {
                                     </DialogFooter>
                                   </DialogContent>
                                 </Dialog>
-                                <Button size="sm" onClick={() => handleApprove(withdrawal)}>
-                                  <Check className="h-4 w-4" />
-                                </Button>
-                                <Button variant="outline" size="sm" onClick={() => handleDecline(withdrawal)}>
-                                  <X className="h-4 w-4" />
-                                </Button>
+
+                                {/* Show Authorize + Resend OTP buttons if initialized */}
+                                {withdrawal.isInitialized && (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="default"
+                                      onClick={() => {
+                                        setWithdrawalForAuth(withdrawal)
+                                        setShowOTPDialog(true)
+                                      }}
+                                    >
+                                      Authorize
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleResendOTP(withdrawal)}
+                                      disabled={resendingOTP}
+                                    >
+                                      {resendingOTP ? "Sending..." : "Resend OTP"}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => handleReverseWithdrawal(withdrawal)}
+                                      disabled={submitting}
+                                    >
+                                      Reverse
+                                    </Button>
+                                  </>
+                                )}
+                                {!withdrawal.isInitialized && (
+                                  <>
+                                    <Button size="sm" onClick={() => handleApprove(withdrawal)}>
+                                      <Check className="h-4 w-4" />
+                                    </Button>
+                                    <Button variant="outline" size="sm" onClick={() => handleDecline(withdrawal)}>
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  </>
+                                )}
+
                               </div>
                             </TableCell>
                           </TableRow>
@@ -953,6 +1331,16 @@ export default function WithdrawalsClientPage() {
                 )}
               </div>
             )}
+
+            {/* Transfer Status Feedback */}
+            {processingTransfer && transferStatus && (
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                  <p className="text-sm font-medium text-blue-900">{transferStatus}</p>
+                </div>
+              </div>
+            )}
             <DialogFooter>
               <Button
                 variant="outline"
@@ -961,15 +1349,23 @@ export default function WithdrawalsClientPage() {
                   setSelectedWithdrawal(null)
                   setDeclineReason("")
                 }}
+                disabled={submitting || processingTransfer}
               >
                 Cancel
               </Button>
               <Button
                 onClick={confirmAction}
                 variant={actionType === "approve" ? "default" : "destructive"}
-                disabled={actionType === "decline" && !declineReason.trim()}
+                disabled={(actionType === "decline" && !declineReason.trim()) || submitting || processingTransfer}
               >
-                {actionType === "approve" ? "Approve" : "Decline"}
+                {submitting || processingTransfer ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    {processingTransfer ? "Processing Transfer..." : "Processing..."}
+                  </>
+                ) : (
+                  actionType === "approve" ? "Approve" : "Decline"
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1181,6 +1577,111 @@ export default function WithdrawalsClientPage() {
                   </>
                 ) : (
                   "Create Withdrawal Request"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* OTP Authorization Dialog */}
+        <Dialog open={showOTPDialog} onOpenChange={setShowOTPDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Authorize Withdrawal</DialogTitle>
+              <DialogDescription>
+                Enter the OTP sent to your email to authorize this withdrawal
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-sm font-medium mt-2" htmlFor="otp">OTP Code *</Label>
+                <Input
+                  id="otp"
+                  placeholder="Enter 6-digit OTP"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  maxLength={6}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowOTPDialog(false)
+                  setOtpCode("")
+                }}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAuthorizeWithdrawal}
+                disabled={submitting || !otpCode.trim()}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Authorizing...
+                  </>
+                ) : (
+                  "Authorize"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Reversal Confirmation Dialog */}
+        <Dialog open={showReverseDialog} onOpenChange={setShowReverseDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Confirm Withdrawal Reversal</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to reverse this withdrawal? This action will return the funds to the user's savings plan.
+              </DialogDescription>
+            </DialogHeader>
+            {withdrawalToReverse && (
+              <div className="space-y-4">
+                <div className="bg-muted p-4 rounded-lg space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm font-medium">Amount:</span>
+                    <span className="text-sm font-semibold">₦{withdrawalToReverse.totalTransferableAmount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm font-medium">User:</span>
+                    <span className="text-sm">{getUserName(withdrawalToReverse.userId)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm font-medium">Bank:</span>
+                    <span className="text-sm">{withdrawalToReverse.destinationBankName}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowReverseDialog(false)
+                  setWithdrawalToReverse(null)
+                }}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmReversal}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Reversing...
+                  </>
+                ) : (
+                  "Confirm Reversal"
                 )}
               </Button>
             </DialogFooter>

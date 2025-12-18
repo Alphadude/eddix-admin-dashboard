@@ -50,6 +50,7 @@ import {
     writeBatch,
 } from "firebase/firestore"
 import { toast, Toaster } from "react-hot-toast"
+import { getBankList } from "@/lib/monnifyService"
 
 interface Bank {
     id: string
@@ -70,6 +71,11 @@ interface User {
     email: string
 }
 
+interface MonnifyBank {
+    name: string
+    code: string
+}
+
 export default function BanksClientPage() {
     const [banks, setBanks] = useState<Bank[]>([])
     const [users, setUsers] = useState<Record<string, User>>({})
@@ -79,6 +85,8 @@ export default function BanksClientPage() {
     const [showCreateDialog, setShowCreateDialog] = useState(false)
     const [searchTerm, setSearchTerm] = useState("")
     const [bankToDelete, setBankToDelete] = useState<Bank | null>(null)
+    const [monnifyBanks, setMonnifyBanks] = useState<MonnifyBank[]>([])
+    const [loadingBanks, setLoadingBanks] = useState(false)
     const [newBank, setNewBank] = useState({
         userId: "",
         accountName: "",
@@ -130,6 +138,26 @@ export default function BanksClientPage() {
 
         fetchData()
     }, [])
+
+    // Fetch Monnify banks when create dialog opens
+    useEffect(() => {
+        const fetchMonnifyBanks = async () => {
+            if (!showCreateDialog) return
+
+            try {
+                setLoadingBanks(true)
+                const banksList = await getBankList()
+                setMonnifyBanks(banksList)
+            } catch (error) {
+                console.error("Error fetching Monnify banks:", error)
+                toast.error("Failed to load bank list")
+            } finally {
+                setLoadingBanks(false)
+            }
+        }
+
+        fetchMonnifyBanks()
+    }, [showCreateDialog])
 
     // Calculate statistics
     const totalBanks = banks.length
@@ -521,12 +549,30 @@ export default function BanksClientPage() {
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="bankName">Bank Name *</Label>
-                                <Input
-                                    id="bankName"
-                                    placeholder="e.g., GTBank"
+                                <Select
                                     value={newBank.bankName}
-                                    onChange={(e) => setNewBank({ ...newBank, bankName: e.target.value })}
-                                />
+                                    onValueChange={(value) => {
+                                        // Find the selected bank to get its code
+                                        const selectedBank = monnifyBanks.find(b => b.name === value)
+                                        setNewBank({
+                                            ...newBank,
+                                            bankName: value,
+                                            bankCode: selectedBank?.code || ""
+                                        })
+                                    }}
+                                    disabled={loadingBanks}
+                                >
+                                    <SelectTrigger id="bankName">
+                                        <SelectValue placeholder={loadingBanks ? "Loading banks..." : "Select a bank..."} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {monnifyBanks.map((bank) => (
+                                            <SelectItem key={bank.code} value={bank.name}>
+                                                {bank.name}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
                             <div className="space-y-2">
                                 <Label htmlFor="bankCode">Bank Code *</Label>
@@ -535,7 +581,10 @@ export default function BanksClientPage() {
                                     placeholder="e.g., 044"
                                     value={newBank.bankCode}
                                     onChange={(e) => setNewBank({ ...newBank, bankCode: e.target.value })}
+                                    disabled
+                                    className="bg-muted"
                                 />
+                                <p className="text-xs text-muted-foreground">Auto-populated when you select a bank</p>
                             </div>
                         </div>
                         <DialogFooter>
