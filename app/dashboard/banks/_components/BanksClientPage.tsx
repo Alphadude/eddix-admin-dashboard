@@ -51,6 +51,7 @@ import {
 } from "firebase/firestore"
 import { toast, Toaster } from "react-hot-toast"
 import { getBankList } from "@/lib/monnifyService"
+import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface Bank {
     id: string
@@ -200,6 +201,16 @@ export default function BanksClientPage() {
             bank.bankName.toLowerCase().includes(search)
         )
     })
+
+    // Add pagination
+    const {
+        currentPage,
+        totalPages,
+        paginatedItems: paginatedBanks,
+        setCurrentPage,
+        totalItems,
+        itemsPerPage,
+    } = usePagination(filteredBanks, 6)
 
     // Handle create bank
     const handleCreateBank = async () => {
@@ -458,7 +469,7 @@ export default function BanksClientPage() {
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    filteredBanks.map((bank) => (
+                                    paginatedBanks.map((bank) => (
                                         <TableRow key={bank.id}>
                                             <TableCell className="font-medium">{getUserName(bank.userId)}</TableCell>
                                             <TableCell>{bank.accountName}</TableCell>
@@ -503,6 +514,15 @@ export default function BanksClientPage() {
                                 )}
                             </TableBody>
                         </Table>
+                        {!loading && filteredBanks.length > 0 && (
+                            <Pagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                onPageChange={setCurrentPage}
+                                itemsPerPage={itemsPerPage}
+                                totalItems={totalItems}
+                            />
+                        )}
                     </CardContent>
                 </Card>
 

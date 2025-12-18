@@ -32,6 +32,7 @@ import { db } from "@/lib/firebase_config"
 import { collection, getDocs, query, orderBy, Timestamp, addDoc, serverTimestamp, deleteDoc, doc } from "firebase/firestore"
 import { toast, Toaster } from "react-hot-toast"
 import { v4 as uuidv4 } from "uuid"
+import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface SavingsPlan {
     id: string
@@ -145,6 +146,16 @@ export function SavingsClientPage() {
         const matchesStatus = statusFilter === "all" || plan.status === statusFilter
         return matchesSearch && matchesStatus
     })
+
+    // Add pagination
+    const {
+        currentPage,
+        totalPages,
+        paginatedItems: paginatedPlans,
+        setCurrentPage,
+        totalItems,
+        itemsPerPage,
+    } = usePagination(filteredPlans, 6)
 
     // Helper functions
     const getUserName = (userId: string) => {
@@ -408,7 +419,7 @@ export function SavingsClientPage() {
                                         </TableCell>
                                     </TableRow>
                                 ) : (
-                                    filteredPlans.map((plan) => {
+                                    paginatedPlans.map((plan) => {
                                         const progress = calculateProgress(plan.actualAmount, plan.targetAmount)
                                         return (
                                             <TableRow key={plan.id}>
@@ -454,6 +465,15 @@ export function SavingsClientPage() {
                                 )}
                             </TableBody>
                         </Table>
+                        {!loading && filteredPlans.length > 0 && (
+                            <Pagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                onPageChange={setCurrentPage}
+                                itemsPerPage={itemsPerPage}
+                                totalItems={totalItems}
+                            />
+                        )}
                     </CardContent>
                 </Card>
 

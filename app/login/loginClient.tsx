@@ -29,12 +29,18 @@ export default function LoginPageClient() {
 
     try {
       await signIn(formData.email, formData.password)
+      // Store admin email in localStorage for profile display
+      localStorage.setItem("adminEmail", formData.email)
       router.push("/dashboard")
     } catch (error: any) {
       console.error("Login error:", error)
 
       // Handle specific Firebase errors
-      if (error.code === "auth/invalid-credential" || error.code === "auth/wrong-password") {
+      if (error.message === "Your account has been deactivated") {
+        setError("Your account has been suspended. Please contact an administrator for assistance.")
+      } else if (error.message === "You are not authorized to access this dashboard") {
+        setError("You are not authorized to access this dashboard")
+      } else if (error.code === "auth/invalid-credential" || error.code === "auth/wrong-password") {
         setError("Invalid email or password")
       } else if (error.code === "auth/user-not-found") {
         setError("No account found with this email")

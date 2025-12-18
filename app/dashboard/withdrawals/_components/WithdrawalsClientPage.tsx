@@ -33,6 +33,7 @@ import {
   serverTimestamp,
   addDoc,
   where,
+  getDoc,
 } from "firebase/firestore"
 import { toast, Toaster } from "react-hot-toast"
 import { formatDistanceToNow } from "date-fns"
@@ -47,6 +48,7 @@ import {
   authorizeSingleTransfer,
   resendOTP
 } from "@/lib/monnifyService"
+import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface WithdrawalRequest {
   id: string
@@ -106,11 +108,11 @@ interface Bank {
   updatedAt: Timestamp
 }
 
-// Fee configuration (adjustable)
-const COMPLETED_PLAN_FEE_PERCENTAGE = 0.10  // 10% if plan completed
-const BROKEN_PLAN_FEE_PERCENTAGE = 0.20     // 20% if plan broken early
-
 export default function WithdrawalsClientPage() {
+  // Fee percentages - fetched from Firebase (default values as fallback)
+  const [completedPlanFeePercentage, setCompletedPlanFeePercentage] = useState(0.10)  // Default 10%
+  const [brokenPlanFeePercentage, setBrokenPlanFeePercentage] = useState(0.20)        // Default 20%
+  
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedWithdrawal, setSelectedWithdrawal] = useState<WithdrawalRequest | null>(null)
   const [actionType, setActionType] = useState<"approve" | "decline" | null>(null)
@@ -192,7 +194,30 @@ export default function WithdrawalsClientPage() {
     return currentDate >= endDate
   }
 
-  // Calculate withdrawal details
+  // Fetch withdrawal fee percentages from Firebase
+  useEffect(() => {
+    const fetchWithdrawalFees = async () => {
+      try {
+        if (!db) return
+
+        const feeDocRef = doc(db, "feesManagement", "withdrawalFees")
+        const feeDoc = await getDoc(feeDocRef)
+
+        if (feeDoc.exists()) {
+          const data = feeDoc.data()
+          // Convert percentage to decimal (e.g., 10 -> 0.10)
+          setCompletedPlanFeePercentage((data.completedPlanFeePercentage || 10) / 100)
+          setBrokenPlanFeePercentage((data.brokenPlanFeePercentage || 20) / 100)
+        }
+      } catch (error) {
+        console.error("Error fetching withdrawal fees:", error)
+        // Keep default values if fetch fails
+      }
+    }
+
+    fetchWithdrawalFees()
+  }, [])
+
   const calculateWithdrawalDetails = (plan: SavingsPlan | null, requestAmount: number) => {
     if (!plan || !requestAmount || isNaN(requestAmount)) {
       return {
@@ -210,7 +235,7 @@ export default function WithdrawalsClientPage() {
     }
 
     const isCompleted = isPlanCompleted(plan)
-    const feePercentage = isCompleted ? COMPLETED_PLAN_FEE_PERCENTAGE : BROKEN_PLAN_FEE_PERCENTAGE
+    const feePercentage = isCompleted ? completedPlanFeePercentage : brokenPlanFeePercentage
     const fee = requestAmount * feePercentage
 
     // Primary validation: Check if requested amount exceeds available balance
@@ -433,6 +458,26 @@ export default function WithdrawalsClientPage() {
   const thisMonthTotal = thisMonthWithdrawals.reduce((sum, w) => sum + w.totalTransferableAmount, 0)
   const thisMonthCount = thisMonthWithdrawals.length
 
+  // Add pagination for pending withdrawals
+  const {
+    currentPage: pendingCurrentPage,
+    totalPages: pendingTotalPages,
+    paginatedItems: paginatedPendingWithdrawals,
+    setCurrentPage: setPendingCurrentPage,
+    totalItems: pendingTotalItems,
+    itemsPerPage: pendingItemsPerPage,
+  } = usePagination(pendingWithdrawals, 6)
+
+  // Add pagination for processed withdrawals
+  const {
+    currentPage: processedCurrentPage,
+    totalPages: processedTotalPages,
+    paginatedItems: paginatedProcessedWithdrawals,
+    setCurrentPage: setProcessedCurrentPage,
+    totalItems: processedTotalItems,
+    itemsPerPage: processedItemsPerPage,
+  } = usePagination(processedWithdrawals, 6)
+
   // Helper function to get user name
   const getUserName = (userId: string) => {
     const user = users[userId]
@@ -615,9 +660,9 @@ export default function WithdrawalsClientPage() {
           })
         }
       }
-     
-     
-     
+
+
+
       // Create a reversal credit transaction
       await addDoc(collection(db, "transactions"), {
         transactionId: uuidv4(),
@@ -1092,7 +1137,7 @@ export default function WithdrawalsClientPage() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      pendingWithdrawals.map((withdrawal) => {
+                      paginatedPendingWithdrawals.map((withdrawal) => {
                         const dateInfo = formatDate(withdrawal.createdAt)
                         return (
                           <TableRow key={withdrawal.id}>
@@ -1217,6 +1262,15 @@ export default function WithdrawalsClientPage() {
                     }
                   </TableBody>
                 </Table>
+                {pendingWithdrawals.length > 0 && (
+                  <Pagination
+                    currentPage={pendingCurrentPage}
+                    totalPages={pendingTotalPages}
+                    onPageChange={setPendingCurrentPage}
+                    itemsPerPage={pendingItemsPerPage}
+                    totalItems={pendingTotalItems}
+                  />
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -1263,7 +1317,7 @@ export default function WithdrawalsClientPage() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      processedWithdrawals.map((withdrawal) => {
+                      paginatedProcessedWithdrawals.map((withdrawal) => {
                         const dateInfo = formatDate(withdrawal.updatedAt)
                         return (
                           <TableRow key={withdrawal.id}>
@@ -1282,6 +1336,15 @@ export default function WithdrawalsClientPage() {
                     )}
                   </TableBody>
                 </Table>
+                {processedWithdrawals.length > 0 && (
+                  <Pagination
+                    currentPage={processedCurrentPage}
+                    totalPages={processedTotalPages}
+                    onPageChange={setProcessedCurrentPage}
+                    itemsPerPage={processedItemsPerPage}
+                    totalItems={processedTotalItems}
+                  />
+                )}
               </CardContent>
             </Card>
           </TabsContent>

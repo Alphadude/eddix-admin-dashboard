@@ -19,6 +19,7 @@ import { startOfDay, startOfWeek, startOfMonth } from "date-fns"
 import { v4 as uuidv4 } from "uuid"
 import { cn } from "@/lib/utils"
 import { toast, Toaster } from "react-hot-toast"
+import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface Transaction {
   transactionId: string
@@ -204,6 +205,16 @@ export function ContributionsClientPage() {
 
     return matchesSearch && matchesStatus
   })
+
+  // Add pagination
+  const {
+    currentPage,
+    totalPages,
+    paginatedItems: paginatedContributions,
+    setCurrentPage,
+    totalItems,
+    itemsPerPage,
+  } = usePagination(filteredContributions, 6)
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -406,10 +417,10 @@ export function ContributionsClientPage() {
                     <SelectItem value="failed">Failed</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button variant="outline" size="sm">
+                {/* <Button variant="outline" size="sm">
                   <Download className="h-4 w-4 mr-2" />
                   Export
-                </Button>
+                </Button> */}
                 <Button size="sm" onClick={() => setShowAddContribution(true)}>
                   <Plus className="h-4 w-4 mr-2" />
                   Add Contribution
@@ -446,7 +457,7 @@ export function ContributionsClientPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredContributions.map((transaction) => {
+                  paginatedContributions.map((transaction) => {
                     const user = users[transaction.userId]
                     const userName = user ? `${user.firstName} ${user.lastName}` : "Unknown User"
                     const { date, time } = formatDateTime(transaction.createdAt)
@@ -474,6 +485,15 @@ export function ContributionsClientPage() {
                 )}
               </TableBody>
             </Table>
+            {!loading && filteredContributions.length > 0 && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+                itemsPerPage={itemsPerPage}
+                totalItems={totalItems}
+              />
+            )}
           </CardContent>
         </Card>
 

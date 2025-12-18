@@ -16,6 +16,7 @@ import { db } from "@/lib/firebase_config"
 import { collection, onSnapshot, query, orderBy, Timestamp, getDocs, where, limit, serverTimestamp, updateDoc, doc } from "firebase/firestore"
 import { formatDistanceToNow } from "date-fns"
 import { toast, Toaster } from "react-hot-toast"
+import { Pagination, usePagination } from "@/components/ui/pagination"
 
 
 interface User {
@@ -141,6 +142,16 @@ export default function UsersPage() {
         user.phoneNumber.includes(searchTerm)
     }
   )
+
+  // Add pagination
+  const {
+    currentPage,
+    totalPages,
+    paginatedItems: paginatedUsers,
+    setCurrentPage,
+    totalItems,
+    itemsPerPage,
+  } = usePagination(filteredUsers, 6)
 
   const getStatusBadge = (status: string) => {
     if (status === "active") {
@@ -415,7 +426,7 @@ export default function UsersPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredUsers.map((user) => (
+                  paginatedUsers.map((user) => (
                     <TableRow key={user.uid}>
                       <TableCell>
                         <div>
@@ -473,6 +484,15 @@ export default function UsersPage() {
                 )}
               </TableBody>
             </Table>
+            {!loading && filteredUsers.length > 0 && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+                itemsPerPage={itemsPerPage}
+                totalItems={totalItems}
+              />
+            )}
           </CardContent>
         </Card>
 
