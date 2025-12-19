@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
-import { adminAuth, adminDb } from "../../../../lib/firebase-admin";
+import { adminAuth, adminDb, ensureInitialized } from "../../../../lib/firebase-admin";
 import { Timestamp } from "firebase-admin/firestore";
 
 export async function POST(request: Request) {
     try {
+        // Ensure Firebase Admin SDK is initialized
+        ensureInitialized();
+
         const body = await request.json();
         const { email, firstName, lastName, phoneNumber } = body;
 
@@ -25,7 +28,7 @@ export async function POST(request: Request) {
         }
 
         // 1. Create user in Firebase Authentication
-        const userRecord = await adminAuth.createUser({
+        const userRecord = await adminAuth!.createUser({
             email,
             password: "123456",
         });
@@ -48,7 +51,7 @@ export async function POST(request: Request) {
             updatedAt: now,
         };
 
-        await adminDb.collection("users").doc(uid).set(userData);
+        await adminDb!.collection("users").doc(uid).set(userData);
 
         // Return complete user data
         return NextResponse.json({
