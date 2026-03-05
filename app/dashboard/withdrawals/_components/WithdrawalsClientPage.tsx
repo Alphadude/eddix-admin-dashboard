@@ -230,6 +230,23 @@ export default function WithdrawalsClientPage() {
     return currentDate >= endDate;
   };
 
+  /**
+   * Time-based fee rule:
+   * - Within the first 3 months of the plan start date → 20% charge
+   * - After 3 months from the plan start date          → 10% charge
+   */
+  const getTimedFeePercentage = (plan: SavingsPlan): { rate: number; label: string } => {
+    const startDate = plan.startDate.toDate();
+    const threeMonthsAfterStart = new Date(startDate);
+    threeMonthsAfterStart.setMonth(threeMonthsAfterStart.getMonth() + 3);
+    const now = new Date();
+
+    if (now < threeMonthsAfterStart) {
+      return { rate: 0.20, label: "Early (20%)" };
+    }
+    return { rate: 0.10, label: "Standard (10%)" };
+  };
+
   // Fetch withdrawal fee percentages from Firebase
   useEffect(() => {
     const fetchWithdrawalFees = async () => {
@@ -266,6 +283,7 @@ export default function WithdrawalsClientPage() {
       return {
         isCompleted: false,
         feePercentage: 0,
+        feeLabel: "",
         fee: 0,
         totalDeducted: 0,
         hasSufficientFunds: false,
@@ -278,9 +296,8 @@ export default function WithdrawalsClientPage() {
     }
 
     const isCompleted = isPlanCompleted(plan);
-    const feePercentage = isCompleted
-      ? completedPlanFeePercentage
-      : brokenPlanFeePercentage;
+    // Use time-based fee: 20% in first 3 months, 10% after
+    const { rate: feePercentage, label: feeLabel } = getTimedFeePercentage(plan);
     const fee = requestAmount * feePercentage;
 
     // Primary validation: Check if requested amount exceeds available balance
@@ -312,6 +329,7 @@ export default function WithdrawalsClientPage() {
     return {
       isCompleted,
       feePercentage,
+      feeLabel,
       fee,
       totalDeducted,
       hasSufficientFunds,
@@ -1409,7 +1427,20 @@ export default function WithdrawalsClientPage() {
                               )}
                             </TableCell>
                             <TableCell className="font-semibold">
-                              {((withdrawal.breakingFeePercentage ?? 0) * 100).toFixed(0)}%
+                              <div className="flex flex-col gap-0.5">
+                                <span>{((withdrawal.breakingFeePercentage ?? 0) * 100).toFixed(0)}%</span>
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  {(() => {
+                                    if (!withdrawal.createdAt) return null;
+                                    const created = withdrawal.createdAt.toDate();
+                                    // Determine label based on when request was made relative to
+                                    // when we can infer the savings plan start (use createdAt as proxy
+                                    // if savingsPlan startDate unavailable; breakingFeePercentage is authoritative)
+                                    const feeRate = (withdrawal.breakingFeePercentage ?? 0) * 100;
+                                    return feeRate >= 20 ? "Early withdrawal" : "Standard rate";
+                                  })()}
+                                </span>
+                              </div>
                             </TableCell>
                             <TableCell className="max-w-32 truncate">
                               {withdrawal.narration}
