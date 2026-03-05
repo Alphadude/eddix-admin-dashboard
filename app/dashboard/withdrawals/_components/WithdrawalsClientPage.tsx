@@ -1409,7 +1409,7 @@ export default function WithdrawalsClientPage() {
                               )}
                             </TableCell>
                             <TableCell className="font-semibold">
-                              {withdrawal.breakingFeePercentage * 100}%
+                              {((withdrawal.breakingFeePercentage ?? 0) * 100).toFixed(0)}%
                             </TableCell>
                             <TableCell className="max-w-32 truncate">
                               {withdrawal.narration}
