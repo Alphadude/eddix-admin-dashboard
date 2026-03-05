@@ -7,12 +7,18 @@ import { Suspense } from "react"
 import { AuthProvider } from "@/contexts/auth-context"
 import "./globals.css"
 
+// Force all pages to be rendered dynamically (at request time) rather than
+// statically pre-rendered at build time. This prevents Firebase from being
+// initialised during `next build` when NEXT_PUBLIC_* env vars are not set.
+export const dynamic = "force-dynamic"
+
 export const metadata: Metadata = {
   title: "Eddix Admin",
   description:
     "Comprehensive admin dashboard for managing Eddix Savings platform - monitor contributions, process withdrawals, manage users, and track financial metrics in real-time.",
   generator: "v0.app",
 }
+
 
 export default function RootLayout({
   children,

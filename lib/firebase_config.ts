@@ -11,9 +11,19 @@ const firebaseConfig = {
     appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// Guard: only initialize Firebase when env vars are present.
+// During `next build` on Vercel the NEXT_PUBLIC_* vars may not be set,
+// which causes Firebase to throw auth/invalid-api-key during static prerender.
+// With `export const dynamic = "force-dynamic"` in layout.tsx, pages are never
+// statically pre-rendered at build time so this guard is a safety net only.
+const app = (() => {
+    if (!firebaseConfig.apiKey || !firebaseConfig.projectId) return null;
+    return !getApps().length ? initializeApp(firebaseConfig) : getApp();
+})();
 
-const auth = getAuth(app);
-const db = getFirestore(app);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const auth = app ? getAuth(app) : (null as any);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const db = app ? getFirestore(app) : (null as any);
 
 export { app, auth, db };
