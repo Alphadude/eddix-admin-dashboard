@@ -285,6 +285,7 @@ export default function WithdrawalsClientPage() {
         feePercentage: 0,
         feeLabel: "",
         fee: 0,
+        feeSource: "balance" as "balance" | "request",
         totalDeducted: 0,
         hasSufficientFunds: false,
         maxWithdrawable: 0,
@@ -300,19 +301,31 @@ export default function WithdrawalsClientPage() {
     const { rate: feePercentage, label: feeLabel } = getTimedFeePercentage(plan);
     const fee = requestAmount * feePercentage;
 
-    // Primary validation: Check if requested amount exceeds available balance
+    // Primary validation: can the user even withdraw the requested amount?
     const hasSufficientFunds = requestAmount <= plan.actualAmount;
 
-    // Fee is deducted from balance first
-    const balanceAfterFee = plan.actualAmount - fee;
+    let actualAmountReceived = 0;
+    let totalDeducted = 0;
+    let feeSource: "balance" | "request" = "balance";
 
-    // User receives the minimum of: requested amount OR balance after fee
-    const actualAmountReceived = hasSufficientFunds
-      ? Math.min(requestAmount, balanceAfterFee)
-      : 0;
-
-    // Total deducted from savings = fee + actual amount received
-    const totalDeducted = fee + actualAmountReceived;
+    if (hasSufficientFunds) {
+      if (plan.actualAmount >= requestAmount + fee) {
+        // ✅ Case 1: Balance covers request + fee separately.
+        // Fee is taken from the savings balance on top of the withdrawal.
+        // User gets the full requested amount.
+        feeSource = "balance";
+        actualAmountReceived = requestAmount;
+        totalDeducted = requestAmount + fee;
+      } else {
+        // ⚠️ Case 2: Balance covers the request but not the extra fee on top.
+        // Fee is deducted from within the requested amount.
+        // User gets: requestAmount - fee.
+        feeSource = "request";
+        actualAmountReceived = requestAmount - fee;
+        totalDeducted = requestAmount; // only requestAmount leaves the savings
+      }
+    }
+    // Case 3: Insufficient balance — actualAmountReceived stays 0.
 
     // Maximum amount user can withdraw is their actual balance
     const maxWithdrawable = plan.actualAmount;
@@ -322,15 +335,15 @@ export default function WithdrawalsClientPage() {
       ? plan.actualAmount - totalDeducted
       : plan.actualAmount;
 
-    // Partial withdrawal if user receives less than requested OR balance remains
-    const isPartialWithdrawal =
-      actualAmountReceived < requestAmount || remainingBalance > 0;
+    // Partial if user receives less than requested
+    const isPartialWithdrawal = actualAmountReceived < requestAmount;
 
     return {
       isCompleted,
       feePercentage,
       feeLabel,
       fee,
+      feeSource,
       totalDeducted,
       hasSufficientFunds,
       maxWithdrawable,
@@ -1038,15 +1051,18 @@ export default function WithdrawalsClientPage() {
           setSavingsPlans(savingsData);
         }
 
-        // Fix 4: Fire payout_rejected notification for the user
+        // Rejection = money returned to savings → show as green Top Up notification
         await addDoc(collection(db, "notifications"), {
           userId: selectedWithdrawal.userId,
-          type: "payout_rejected",
-          title: "Withdrawal Rejected",
-          message: `Your withdrawal request of ₦${selectedWithdrawal.requestAmount.toLocaleString()} was declined${declineReason ? `: ${declineReason}` : "."}`,
+          type: "top_up",
+          title: "Top Up — Funds Returned",
+          message: `Your withdrawal request of ₦${selectedWithdrawal.requestAmount.toLocaleString()} was declined and ₦${selectedWithdrawal.totalDeductedAmount.toLocaleString()} has been returned to your savings${declineReason ? `. Reason: ${declineReason}` : "."}`,
           isRead: false,
+          color: "green",
+          isTopUp: true,
           createdAt: serverTimestamp(),
         });
+
 
         toast.success(`Withdrawal request declined and funds restored`);
       }
@@ -1418,12 +1434,16 @@ export default function WithdrawalsClientPage() {
                               {getUserName(withdrawal.userId)}
                             </TableCell>
                             <TableCell className="font-semibold">
-                              {formatCurrency(withdrawal.requestAmount)}
+                              <div className="flex flex-col gap-0.5">
+                                <span>{formatCurrency(withdrawal.requestAmount)}</span>
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  Receives: {formatCurrency(withdrawal.totalTransferableAmount ?? withdrawal.requestAmount)}
+                                </span>
+                              </div>
                             </TableCell>
                             <TableCell className="font-semibold">
                               {formatCurrency(
-                                withdrawal.totalDeductedAmount -
-                                  withdrawal.requestAmount,
+                                withdrawal.requestAmount * (withdrawal.breakingFeePercentage ?? 0)
                               )}
                             </TableCell>
                             <TableCell className="font-semibold">
