@@ -590,6 +590,43 @@ export default function WithdrawalsClientPage() {
     return user ? `${user.firstName} ${user.lastName}` : "Unknown User";
   };
 
+  /**
+   * Compute the correct fee for any withdrawal request at render time.
+   * Uses the savings plan's startDate and the withdrawal's createdAt
+   * to determine the fee rate — ignoring the stored breakingFeePercentage
+   * which may be 0 or incorrect for older requests.
+   *
+   * Rule: < 3 months from plan start → 20%, else → 10%
+   */
+  const computeWithdrawalFee = (withdrawal: WithdrawalRequest) => {
+    const plan = savingsPlans.find(
+      (p) => p.savingsId === withdrawal.savingsId
+    );
+
+    let feeRate = withdrawal.breakingFeePercentage ?? 0;
+    let feeLabel = feeRate >= 0.2 ? "Early withdrawal" : "Standard rate";
+
+    if (plan?.startDate && withdrawal.createdAt) {
+      const startDate = plan.startDate.toDate();
+      const withdrawalDate = withdrawal.createdAt.toDate();
+      const threeMonthsAfterStart = new Date(startDate);
+      threeMonthsAfterStart.setMonth(threeMonthsAfterStart.getMonth() + 3);
+
+      if (withdrawalDate < threeMonthsAfterStart) {
+        feeRate = 0.20;
+        feeLabel = "Early withdrawal";
+      } else {
+        feeRate = 0.10;
+        feeLabel = "Standard rate";
+      }
+    }
+
+    const feeAmount = withdrawal.requestAmount * feeRate;
+    const amountReceived = withdrawal.totalTransferableAmount ?? (withdrawal.requestAmount - feeAmount);
+
+    return { feeRate, feeAmount, feeLabel, amountReceived };
+  };
+
   // Helper function to format currency
   const formatCurrency = (amount: number) => {
     return `₦${amount.toLocaleString()}`;
@@ -1423,6 +1460,7 @@ export default function WithdrawalsClientPage() {
                     ) : (
                       paginatedPendingWithdrawals.map((withdrawal) => {
                         const dateInfo = formatDate(withdrawal.createdAt);
+                        const { feeRate, feeAmount, feeLabel, amountReceived } = computeWithdrawalFee(withdrawal);
                         return (
                           <TableRow key={withdrawal.id}>
                             <TableCell className="font-medium">
@@ -1433,32 +1471,25 @@ export default function WithdrawalsClientPage() {
                             <TableCell>
                               {getUserName(withdrawal.userId)}
                             </TableCell>
+                            {/* Amount: what user requested + what they'll actually receive */}
                             <TableCell className="font-semibold">
                               <div className="flex flex-col gap-0.5">
                                 <span>{formatCurrency(withdrawal.requestAmount)}</span>
                                 <span className="text-xs font-normal text-muted-foreground">
-                                  Receives: {formatCurrency(withdrawal.totalTransferableAmount ?? withdrawal.requestAmount)}
+                                  Receives: {formatCurrency(amountReceived)}
                                 </span>
                               </div>
                             </TableCell>
+                            {/* Fee: computed naira fee amount */}
                             <TableCell className="font-semibold">
-                              {formatCurrency(
-                                withdrawal.requestAmount * (withdrawal.breakingFeePercentage ?? 0)
-                              )}
+                              {formatCurrency(feeAmount)}
                             </TableCell>
+                            {/* Charge: computed fee rate % + label */}
                             <TableCell className="font-semibold">
                               <div className="flex flex-col gap-0.5">
-                                <span>{((withdrawal.breakingFeePercentage ?? 0) * 100).toFixed(0)}%</span>
+                                <span>{(feeRate * 100).toFixed(0)}%</span>
                                 <span className="text-xs font-normal text-muted-foreground">
-                                  {(() => {
-                                    if (!withdrawal.createdAt) return null;
-                                    const created = withdrawal.createdAt.toDate();
-                                    // Determine label based on when request was made relative to
-                                    // when we can infer the savings plan start (use createdAt as proxy
-                                    // if savingsPlan startDate unavailable; breakingFeePercentage is authoritative)
-                                    const feeRate = (withdrawal.breakingFeePercentage ?? 0) * 100;
-                                    return feeRate >= 20 ? "Early withdrawal" : "Standard rate";
-                                  })()}
+                                  {feeLabel}
                                 </span>
                               </div>
                             </TableCell>
