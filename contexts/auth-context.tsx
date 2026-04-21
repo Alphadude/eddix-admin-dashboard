@@ -33,6 +33,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const router = useRouter()
 
     useEffect(() => {
+        if (!auth) {
+            console.warn("Firebase Auth not initialized. Check your environment variables.")
+            setLoading(false)
+            return
+        }
+
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
             setUser(user)
 
@@ -72,10 +78,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setLoading(false)
         })
 
-        return () => unsubscribe()
+        return () => unsubscribe && unsubscribe()
     }, [])
 
     const signIn = async (email: string, password: string) => {
+        if (!auth) {
+            throw new Error("Authentication service is not initialized")
+        }
+
         try {
             const userCredential = await signInWithEmailAndPassword(auth, email, password)
 
@@ -107,6 +117,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const signOut = async () => {
+        if (!auth) {
+            setUser(null)
+            setAdminData(null)
+            router.push("/login")
+            return
+        }
+
         try {
             await firebaseSignOut(auth)
             setUser(null)

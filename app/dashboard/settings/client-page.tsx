@@ -20,7 +20,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Settings, Users, DollarSign, Bell, Shield, Upload, Plus, Edit, Trash2, Loader2, Eye } from "lucide-react"
+import { Settings, Users, DollarSign, Bell, Shield, Upload, Plus, Edit, Trash2, Loader2, Eye, Lock } from "lucide-react"
 import { useState, useEffect } from "react"
 import { db } from "@/lib/firebase_config"
 import {
@@ -36,7 +36,7 @@ import {
 } from "firebase/firestore"
 import { toast, Toaster } from "react-hot-toast"
 import { auth } from "@/lib/firebase_config"
-import { createUserWithEmailAndPassword } from "firebase/auth"
+import { createUserWithEmailAndPassword, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth"
 
 interface AdminUser {
   id: string
@@ -76,6 +76,12 @@ export default function ClientSettingsPage() {
     pushNotifications: true,
     weeklyReports: true,
   })
+  const [passwordData, setPasswordData] = useState({
+    oldPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  })
+  const [updatingPassword, setUpdatingPassword] = useState(false)
 
   // Fetch fee settings from Firebase
   useEffect(() => {
@@ -176,7 +182,7 @@ export default function ClientSettingsPage() {
       setCreatingAdmin(true)
 
       if (!db || !auth) {
-        throw new Error("Firebase not initialized")
+        throw new Error("Authentication service is not initialized. Please check your configuration.")
       }
 
       // Create Firebase Authentication user
@@ -326,6 +332,66 @@ export default function ClientSettingsPage() {
     }
   }
 
+  // Update password logic
+  const handleUpdatePassword = async () => {
+    // Validate required fields
+    if (!passwordData.oldPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
+      toast.error("Please fill in all password fields")
+      return
+    }
+
+    // Validate password match
+    if (passwordData.newPassword !== passwordData.confirmPassword) {
+      toast.error("New passwords do not match")
+      return
+    }
+
+    // Validate password length
+    if (passwordData.newPassword.length < 6) {
+      toast.error("New password must be at least 6 characters")
+      return
+    }
+
+    try {
+      setUpdatingPassword(true)
+
+      if (!auth || !auth.currentUser) {
+        throw new Error("Authentication service is not initialized or you are not logged in")
+      }
+
+      if (!auth.currentUser.email) {
+        throw new Error("User email not found")
+      }
+
+      // Re-authenticate user before sensitive action
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, passwordData.oldPassword)
+      await reauthenticateWithCredential(auth.currentUser, credential)
+
+      // Update password
+      await updatePassword(auth.currentUser, passwordData.newPassword)
+
+      toast.success("Password updated successfully!")
+
+      // Reset form
+      setPasswordData({
+        oldPassword: "",
+        newPassword: "",
+        confirmPassword: ""
+      })
+    } catch (error: any) {
+      console.error("Error updating password:", error)
+      if (error.code === "auth/wrong-password") {
+        toast.error("Current password is incorrect")
+      } else if (error.code === "auth/requires-recent-login") {
+        toast.error("Please log out and log back in to perform this action")
+      } else {
+        toast.error(`Failed to update password: ${error.message}`)
+      }
+    } finally {
+      setUpdatingPassword(false)
+    }
+  }
+
   const getRoleBadge = (role: string) => {
     const roleFormatted = role.replace("_", " ").replace(/\b\w/g, (l) => l.toUpperCase())
 
@@ -379,7 +445,7 @@ export default function ClientSettingsPage() {
         </div>
 
         <Tabs defaultValue="fees" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="fees" className="flex items-center gap-2">
               <DollarSign className="h-4 w-4" />
               Fee Rules
@@ -387,6 +453,10 @@ export default function ClientSettingsPage() {
             <TabsTrigger value="admins" className="flex items-center gap-2">
               <Users className="h-4 w-4" />
               Admins
+            </TabsTrigger>
+            <TabsTrigger value="security" className="flex items-center gap-2">
+              <Lock className="h-4 w-4" />
+              Security
             </TabsTrigger>
           </TabsList>
 
@@ -753,6 +823,65 @@ export default function ClientSettingsPage() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+          </TabsContent>
+          <TabsContent value="security">
+            <Card>
+              <CardHeader>
+                <CardTitle>Security Settings</CardTitle>
+                <CardDescription>Update your account password and manage security preferences</CardDescription>
+              </CardHeader>
+              <CardContent className="max-w-md">
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="old-password">Old Password</Label>
+                    <Input
+                      id="old-password"
+                      type="password"
+                      placeholder="Enter your current password"
+                      value={passwordData.oldPassword}
+                      onChange={(e) => setPasswordData(prev => ({ ...prev, oldPassword: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-password">New Password</Label>
+                    <Input
+                      id="new-password"
+                      type="password"
+                      placeholder="Enter your new password"
+                      value={passwordData.newPassword}
+                      onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
+                    />
+                    <p className="text-xs text-muted-foreground">Minimum 6 characters</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="confirm-password">Confirm New Password</Label>
+                    <Input
+                      id="confirm-password"
+                      type="password"
+                      placeholder="Confirm your new password"
+                      value={passwordData.confirmPassword}
+                      onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                    />
+                  </div>
+                  <div className="pt-2">
+                    <Button
+                      onClick={handleUpdatePassword}
+                      disabled={updatingPassword}
+                      className="w-full sm:w-auto"
+                    >
+                      {updatingPassword ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Updating Password...
+                        </>
+                      ) : (
+                        "Update Password"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>
