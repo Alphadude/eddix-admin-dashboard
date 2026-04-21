@@ -43,6 +43,9 @@ interface UserData {
   email: string
   phoneNumber: string
   status: string
+  accountActivated?: boolean
+  activationAmount?: number
+  createdAt: Timestamp
 }
 
 interface SavingsPlan {
@@ -61,6 +64,17 @@ interface SavingsPlan {
   createdAt: Timestamp
 }
 
+interface WithdrawalRequest {
+  id: string
+  userId: string
+  status: string
+  requestAmount: number
+  totalDeductedAmount: number
+  totalTransferableAmount: number
+  createdAt: Timestamp
+  updatedAt: Timestamp
+}
+
 export function ContributionsClientPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
@@ -68,6 +82,7 @@ export function ContributionsClientPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [users, setUsers] = useState<Record<string, UserData>>({})
   const [allUsers, setAllUsers] = useState<UserData[]>([])
+  const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [openUserSelect, setOpenUserSelect] = useState(false)
@@ -121,6 +136,16 @@ export function ContributionsClientPage() {
 
         setUsers(usersData)
         setAllUsers(allUsersArray)
+
+        // Fetch Withdrawal Requests for fee calculation
+        const withdrawalsRef = collection(db, "withdrawalRequests")
+        const withdrawalsSnapshot = await getDocs(withdrawalsRef)
+        const withdrawalsData = withdrawalsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as WithdrawalRequest[]
+        setWithdrawalRequests(withdrawalsData)
+
         setLoading(false)
       } catch (error) {
         console.error("Error fetching data:", error)
@@ -191,6 +216,40 @@ export function ContributionsClientPage() {
   const totalProcessing = transactions
     .filter((t) => t.status === "processing")
     .reduce((sum, t) => sum + (t.amount || 0), 0)
+
+  // Platform Earnings Calculations
+  const calculateEarnings = (startDate?: Date) => {
+    // 1. Activation Fees
+    const activationFees = allUsers
+      .filter(u => u.accountActivated && u.activationAmount)
+      .filter(u => {
+        if (!startDate) return true
+        const activeDate = u.createdAt?.toDate()
+        return activeDate && activeDate >= startDate
+      })
+      .reduce((sum, u) => sum + (u.activationAmount || 0), 0)
+
+    // 2. Savings Fees (Withdrawal Fees)
+    const withdrawalFees = withdrawalRequests
+      .filter(w => w.status === "approved")
+      .filter(w => {
+        if (!startDate) return true
+        const approvedDate = w.updatedAt?.toDate()
+        return approvedDate && approvedDate >= startDate
+      })
+      .reduce((sum, w) => sum + (w.totalDeductedAmount - w.totalTransferableAmount), 0)
+
+    return {
+      activation: activationFees,
+      savings: withdrawalFees,
+      total: activationFees + withdrawalFees
+    }
+  }
+
+  const earningsToday = calculateEarnings(todayStart)
+  const earningsWeek = calculateEarnings(weekStart)
+  const earningsMonth = calculateEarnings(monthStart)
+  const earningsLifetime = calculateEarnings()
 
   const filteredContributions = transactions.filter((transaction) => {
     const user = users[transaction.userId]
@@ -344,48 +403,110 @@ export function ContributionsClientPage() {
           <p className="text-muted-foreground">Manage and track all contribution transactions</p>
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid gap-6 md:grid-cols-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Today</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalToday)}
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">This Week</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalWeek)}
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">This Month</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalMonth)}
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Processing</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">
-                {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalProcessing)}
-              </div>
-            </CardContent>
-          </Card>
+        {/* Contribution Volume Stats */}
+        <div>
+          <h2 className="text-lg font-semibold mb-4">Contribution Volume</h2>
+          <div className="grid gap-6 md:grid-cols-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Today</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalToday)}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">This Week</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalWeek)}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">This Month</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalMonth)}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Processing</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalProcessing)}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Platform Earnings Stats */}
+        <div>
+          <h2 className="text-lg font-semibold mb-4">Platform Earnings</h2>
+          <div className="grid gap-6 md:grid-cols-4">
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Today's Earnings</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(earningsToday.total)}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Act: {formatCurrency(earningsToday.activation)} • Sav: {formatCurrency(earningsToday.savings)}
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">This Week</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(earningsWeek.total)}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Act: {formatCurrency(earningsWeek.activation)} • Sav: {formatCurrency(earningsWeek.savings)}
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">This Month</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(earningsMonth.total)}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Act: {formatCurrency(earningsMonth.activation)} • Sav: {formatCurrency(earningsMonth.savings)}
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Lifetime Earnings</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-primary">
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(earningsLifetime.total)}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Act: {formatCurrency(earningsLifetime.activation)} • Sav: {formatCurrency(earningsLifetime.savings)}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
         </div>
 
         {/* Contributions Table */}
