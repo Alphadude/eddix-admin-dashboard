@@ -38,6 +38,7 @@ const navigation = [
   { name: "Contributions", href: "/dashboard/contributions", icon: TrendingUp },
   { name: "Withdrawals", href: "/dashboard/withdrawals", icon: TrendingDown },
   { name: "Reports", href: "/dashboard/reports", icon: BarChart3 },
+  { name: "Notifications", href: "/dashboard/notifications", icon: Bell },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ]
 
@@ -209,6 +210,16 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </Sheet>
 
           <div className="flex-1" />
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="relative text-muted-foreground hover:text-foreground"
+            onClick={() => router.push("/dashboard/notifications")}
+          >
+            <Bell className="w-5 h-5" />
+            <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-background" />
+          </Button>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
