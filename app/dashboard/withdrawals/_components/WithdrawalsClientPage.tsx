@@ -1286,15 +1286,16 @@ export default function WithdrawalsClientPage() {
           setSavingsPlans(savingsData);
         }
 
-        // Rejection = money returned to savings → show as green Top Up notification
+        // Rejection = money returned to savings → show as blue Refund notification
         await addDoc(collection(db, "notifications"), {
           userId: selectedWithdrawal.userId,
-          type: "top_up",
-          title: "Top Up — Funds Returned",
+          type: "refund",
+          title: "Refund — Funds Returned",
           message: `Your withdrawal request of ₦${selectedWithdrawal.requestAmount.toLocaleString()} was declined and ₦${selectedWithdrawal.totalDeductedAmount.toLocaleString()} has been returned to your savings${declineReason ? `. Reason: ${declineReason}` : "."}`,
           isRead: false,
-          color: "green",
-          isTopUp: true,
+          color: "blue",
+          isTopUp: false,
+          isRefund: true,
           createdAt: serverTimestamp(),
         });
 

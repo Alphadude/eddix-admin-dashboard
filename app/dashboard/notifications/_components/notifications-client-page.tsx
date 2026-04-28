@@ -25,7 +25,7 @@ import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface Notification {
     id: string
-    type: 'registration' | 'savings_created' | 'top_up' | 'withdrawal_initiated' | 'activation'
+    type: 'registration' | 'savings_created' | 'top_up' | 'withdrawal_initiated' | 'activation' | 'refund'
     userId: string
     userName: string
     details: string
@@ -90,12 +90,13 @@ export function NotificationsClientPage() {
                     .filter(doc => doc.data().type === 'credit')
                     .map(doc => {
                         const data = doc.data()
+                        const isRefund = data.ref?.startsWith("REV-") || data.description?.toLowerCase().includes("reversed")
                         return {
                             id: doc.id,
-                            type: 'top_up' as const,
+                            type: (isRefund ? 'refund' : 'top_up') as any,
                             userId: data.userId,
                             userName: data.userName || "User", // Fallback if name not in transaction
-                            details: `Topped up savings: ${data.savingsName || 'Plan'}`,
+                            details: isRefund ? `Refunded to savings: ${data.savingsName || 'Plan'}` : `Topped up savings: ${data.savingsName || 'Plan'}`,
                             amount: data.amount,
                             createdAt: data.createdAt as Timestamp,
                             status: data.status,
@@ -187,6 +188,7 @@ export function NotificationsClientPage() {
             case 'top_up': return <ArrowUpCircle className="h-5 w-5 text-emerald-500" />
             case 'withdrawal_initiated': return <ArrowDownCircle className="h-5 w-5 text-orange-500" />
             case 'activation': return <Zap className="h-5 w-5 text-yellow-500" />
+            case 'refund': return <ArrowUpCircle className="h-5 w-5 text-blue-500" />
             default: return <Clock className="h-5 w-5 text-gray-500" />
         }
     }
@@ -198,6 +200,7 @@ export function NotificationsClientPage() {
             case 'top_up': return <Badge variant="outline" className="text-emerald-600 bg-emerald-50">Top-up</Badge>
             case 'withdrawal_initiated': return <Badge variant="outline" className="text-orange-600 bg-orange-50">Withdrawal</Badge>
             case 'activation': return <Badge variant="outline" className="text-yellow-600 bg-yellow-50">Activation</Badge>
+            case 'refund': return <Badge variant="outline" className="text-blue-600 bg-blue-50">Refund</Badge>
             default: return <Badge variant="outline">Action</Badge>
         }
     }
@@ -258,6 +261,7 @@ export function NotificationsClientPage() {
                                         <SelectItem value="top_up">Top-ups</SelectItem>
                                         <SelectItem value="withdrawal_initiated">Withdrawals</SelectItem>
                                         <SelectItem value="activation">Activations</SelectItem>
+                                        <SelectItem value="refund">Refunds</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
