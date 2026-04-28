@@ -53,7 +53,6 @@ export async function initiateSingleTransfer(transferRequest: {
   destinationBankCode: string
   destinationAccountNumber: string
   currency: string
-  sourceAccountNumber: string
   async?: boolean
 }): Promise<{
   requestSuccessful: boolean

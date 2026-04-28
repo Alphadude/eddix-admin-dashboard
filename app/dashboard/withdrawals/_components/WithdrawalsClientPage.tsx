@@ -1136,7 +1136,6 @@ export default function WithdrawalsClientPage() {
             destinationAccountNumber:
               selectedWithdrawal.destinationBankAccountNumber,
             currency: "NGN",
-            sourceAccountNumber: MONNIFY_ACCOUNT_NUMBER,
             async: false, // Synchronous transfer for immediate feedback
           });
           // console.log("Transfer response:", transferResponse)

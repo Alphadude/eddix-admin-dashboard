@@ -91,10 +91,23 @@ export async function POST(req: NextRequest) {
       }
 
       case "initiateSingleTransfer": {
+        if (!MONNIFY_ACCOUNT_NUMBER) {
+          return NextResponse.json(
+            { error: "MONNIFY_WALLET_ACCOUNT_NUMBER is not configured on this server." },
+            { status: 500 }
+          )
+        }
+        
+        // Inject sourceAccountNumber securely on the server
+        const transferPayload = {
+          ...params.transferRequest,
+          sourceAccountNumber: MONNIFY_ACCOUNT_NUMBER
+        }
+
         const res = await fetch(`${MONNIFY_BASE_URL}/api/v2/disbursements/single`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify(params.transferRequest),
+          body: JSON.stringify(transferPayload),
         })
         result = await res.json()
         break
