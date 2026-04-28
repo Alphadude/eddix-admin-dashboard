@@ -183,6 +183,7 @@ export default function WithdrawalsClientPage() {
   const [withdrawalForAuth, setWithdrawalForAuth] =
     useState<WithdrawalRequest | null>(null);
   const [resendingOTP, setResendingOTP] = useState(false);
+  const [verifyingStatus, setVerifyingStatus] = useState<string | null>(null);
 
   // Reversal confirmation state
   const [showReverseDialog, setShowReverseDialog] = useState(false);
@@ -713,48 +714,67 @@ export default function WithdrawalsClientPage() {
       }
       console.log("Authorization response:", authResponse);
 
-      // Update withdrawal status to approved
+      const status = authResponse.responseBody.status;
       const withdrawalRef = doc(db, "withdrawalRequests", withdrawalForAuth.id);
-      await updateDoc(withdrawalRef, {
-        status: "approved",
-        monnifyTransferStatus: authResponse.responseBody.status,
-        transferCompletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
 
-      // Update the linked transaction status from pending to completed
-      if (withdrawalForAuth.transactionId) {
-        const transactionsRef = collection(db, "transactions");
-        const transactionQuery = query(
-          transactionsRef,
-          where("transactionId", "==", withdrawalForAuth.transactionId),
-        );
-        const transactionSnapshot = await getDocs(transactionQuery);
+      if (status === "SUCCESS") {
+        // Update withdrawal status to approved
+        await updateDoc(withdrawalRef, {
+          status: "approved",
+          monnifyTransferStatus: status,
+          transferCompletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
 
-        if (!transactionSnapshot.empty) {
-          const transactionDoc = transactionSnapshot.docs[0];
-          await updateDoc(doc(db, "transactions", transactionDoc.id), {
-            status: "completed",
-            monnifyReference:
-              authResponse.responseBody.transactionReference || "",
-            updatedAt: serverTimestamp(),
-          });
+        // Update the linked transaction status from pending to completed
+        if (withdrawalForAuth.transactionId) {
+          const transactionsRef = collection(db, "transactions");
+          const transactionQuery = query(
+            transactionsRef,
+            where("transactionId", "==", withdrawalForAuth.transactionId),
+          );
+          const transactionSnapshot = await getDocs(transactionQuery);
+
+          if (!transactionSnapshot.empty) {
+            const transactionDoc = transactionSnapshot.docs[0];
+            await updateDoc(doc(db, "transactions", transactionDoc.id), {
+              status: "completed",
+              monnifyReference:
+                authResponse.responseBody.transactionReference || "",
+              updatedAt: serverTimestamp(),
+            });
+          }
         }
+
+        // Fire payout_approved notification for the user (OTP authorize path)
+        await addDoc(collection(db, "notifications"), {
+          userId: withdrawalForAuth.userId,
+          type: "payout_approved",
+          title: "Withdrawal Approved",
+          message: `Your withdrawal of ₦${withdrawalForAuth.totalTransferableAmount.toLocaleString()} has been approved and transferred.`,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        });
+
+        toast.success(
+          `Withdrawal authorized successfully! ₦${withdrawalForAuth.totalTransferableAmount.toLocaleString()} transferred.`,
+        );
+      } else if (status === "FAILED") {
+        await updateDoc(withdrawalRef, {
+          monnifyTransferStatus: status,
+          updatedAt: serverTimestamp(),
+        });
+        toast.error(`Transfer failed. Initiating auto-reversal...`);
+        await executeAutoReversal(withdrawalForAuth, "Transfer FAILED");
+      } else {
+        await updateDoc(withdrawalRef, {
+          monnifyTransferStatus: status,
+          updatedAt: serverTimestamp(),
+        });
+        toast.success(
+          `OTP Authorized. Transfer status is currently: ${status}. Please verify later.`,
+        );
       }
-
-      // Fix 5: Fire payout_approved notification for the user (OTP authorize path)
-      await addDoc(collection(db, "notifications"), {
-        userId: withdrawalForAuth.userId,
-        type: "payout_approved",
-        title: "Withdrawal Approved",
-        message: `Your withdrawal of ₦${withdrawalForAuth.totalTransferableAmount.toLocaleString()} has been approved and transferred.`,
-        isRead: false,
-        createdAt: serverTimestamp(),
-      });
-
-      toast.success(
-        `Withdrawal authorized successfully! ₦${withdrawalForAuth.totalTransferableAmount.toLocaleString()} transferred.`,
-      );
 
       setShowOTPDialog(false);
       setOtpCode("");
@@ -785,13 +805,184 @@ export default function WithdrawalsClientPage() {
         toast.error(resendOTPResponse.responseMessage);
         return;
       }
-      // console.log("Resend OTP response33:", resendOTPResponse)
       toast.success(resendOTPResponse.responseMessage);
     } catch (error) {
       console.error("Error resending OTP:", error);
       toast.error(`Failed to resend OTP: ${formatMonnifyError(error)}`);
     } finally {
       setResendingOTP(false);
+    }
+  };
+
+  // Helper to auto-reverse a withdrawal when Monnify fails it
+  const executeAutoReversal = async (
+    withdrawal: WithdrawalRequest,
+    reason: string,
+  ) => {
+    try {
+      const savingsSnapshot = await getDocs(
+        query(
+          collection(db, "savings"),
+          where("savingsId", "==", withdrawal.savingsId),
+        ),
+      );
+      if (savingsSnapshot.empty) return;
+
+      const savingsDoc = savingsSnapshot.docs[0];
+      const savingsName = savingsDoc.data().savingsName;
+      const currentAmount = savingsDoc.data().actualAmount || 0;
+
+      await updateDoc(doc(db, "savings", savingsDoc.id), {
+        actualAmount: currentAmount + withdrawal.totalDeductedAmount,
+        updatedAt: serverTimestamp(),
+      });
+
+      if (withdrawal.transactionId) {
+        const transactionsRef = collection(db, "transactions");
+        const transactionQuery = query(
+          transactionsRef,
+          where("transactionId", "==", withdrawal.transactionId),
+        );
+        const transactionSnapshot = await getDocs(transactionQuery);
+
+        if (!transactionSnapshot.empty) {
+          const transactionDoc = transactionSnapshot.docs[0];
+          await updateDoc(doc(db, "transactions", transactionDoc.id), {
+            status: "failed",
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      await addDoc(collection(db, "transactions"), {
+        transactionId: uuidv4(),
+        userId: withdrawal.userId,
+        type: "credit",
+        amount: withdrawal.totalTransferableAmount,
+        description: `Reversed: ${reason}`,
+        ref: `REV-${withdrawal.requestedTransferRef}`,
+        status: "completed",
+        savingsName: savingsName,
+        savingsPlanId: withdrawal.savingsId,
+        trxMethod: "bank",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const withdrawalRef = doc(db, "withdrawalRequests", withdrawal.id);
+      await updateDoc(withdrawalRef, {
+        status: "reversed",
+        rejectedBy: `System Auto Reversal - ${reason}`,
+        updatedAt: serverTimestamp(),
+      });
+
+      await addDoc(collection(db, "notifications"), {
+        userId: withdrawal.userId,
+        type: "top_up",
+        title: "Top Up — Funds Returned",
+        message: `Your withdrawal request of ₦${withdrawal.requestAmount.toLocaleString()} failed and ₦${withdrawal.totalDeductedAmount.toLocaleString()} has been automatically returned to your savings. Reason: ${reason}`,
+        isRead: false,
+        color: "green",
+        isTopUp: true,
+        createdAt: serverTimestamp(),
+      });
+
+      toast.success(
+        `Auto-Reversal: ₦${withdrawal.totalTransferableAmount.toLocaleString()} returned to savings.`,
+      );
+    } catch (error) {
+      console.error("Error executing auto reversal:", error);
+      toast.error(
+        `Auto-reversal failed: ${formatMonnifyError(error)}. Manual reversal needed.`,
+      );
+    }
+  };
+
+  // Handle Verify Status manually
+  const handleVerifyStatus = async (withdrawal: WithdrawalRequest) => {
+    if (!withdrawal.requestedTransferRef) {
+      toast.error("No transfer reference found");
+      return;
+    }
+
+    try {
+      setVerifyingStatus(withdrawal.id);
+      const statusResponse = await getSingleTransferStatus(
+        withdrawal.requestedTransferRef,
+      );
+
+      if (!statusResponse.requestSuccessful) {
+        toast.error(
+          `Failed to verify status: ${statusResponse.responseMessage}`,
+        );
+        return;
+      }
+
+      const currentStatus = statusResponse.responseBody.status;
+      const withdrawalRef = doc(db, "withdrawalRequests", withdrawal.id);
+
+      if (currentStatus === "SUCCESS") {
+        await updateDoc(withdrawalRef, {
+          status: "approved",
+          monnifyTransferStatus: currentStatus,
+          transferCompletedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        // Update the linked transaction status from pending to completed
+        if (withdrawal.transactionId) {
+          const transactionsRef = collection(db, "transactions");
+          const transactionQuery = query(
+            transactionsRef,
+            where("transactionId", "==", withdrawal.transactionId),
+          );
+          const transactionSnapshot = await getDocs(transactionQuery);
+
+          if (!transactionSnapshot.empty) {
+            const transactionDoc = transactionSnapshot.docs[0];
+            await updateDoc(doc(db, "transactions", transactionDoc.id), {
+              status: "completed",
+              monnifyReference:
+                statusResponse.responseBody.transactionReference || "",
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+
+        // Fire payout_approved notification
+        await addDoc(collection(db, "notifications"), {
+          userId: withdrawal.userId,
+          type: "payout_approved",
+          title: "Withdrawal Approved",
+          message: `Your withdrawal of ₦${withdrawal.totalTransferableAmount.toLocaleString()} has been approved and transferred.`,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        });
+
+        toast.success(
+          `Transfer is SUCCESSFUL! ₦${withdrawal.totalTransferableAmount.toLocaleString()} transferred.`,
+        );
+      } else if (currentStatus === "FAILED" || currentStatus === "REVERSED") {
+        await updateDoc(withdrawalRef, {
+          monnifyTransferStatus: currentStatus,
+          updatedAt: serverTimestamp(),
+        });
+        toast.error(`Transfer ${currentStatus.toLowerCase()}. Initiating auto-reversal...`);
+        await executeAutoReversal(withdrawal, `Transfer ${currentStatus}`);
+      } else {
+        await updateDoc(withdrawalRef, {
+          monnifyTransferStatus: currentStatus,
+          updatedAt: serverTimestamp(),
+        });
+        toast.info(`Transfer status is currently: ${currentStatus}`);
+      }
+
+      await fetchWithdrawalRequests();
+    } catch (error) {
+      console.error("Error verifying status:", error);
+      toast.error(`Failed to verify status: ${formatMonnifyError(error)}`);
+    } finally {
+      setVerifyingStatus(null);
     }
   };
 
@@ -960,22 +1151,27 @@ export default function WithdrawalsClientPage() {
             return;
           }
 
-          // const transferSuccessful = isTransferSuccessful(transferResponse.responseBody.status)
+          const transferSuccessful = isTransferSuccessful(
+            transferResponse.responseBody.status,
+          );
+          const isPendingAuth =
+            transferResponse.responseBody.status === "PENDING_AUTHORIZATION";
 
-          // if (!transferSuccessful && transferResponse.responseBody.status !== "PENDING") {
-          //   // Transfer failed immediately
-          //   toast.error(`Transfer status: ${transferResponse.responseBody.status}`)
-          //   setSubmitting(false)
-          //   setProcessingTransfer(false)
-          //   setTransferStatus("")
-          //   return
-          // }
+          if (!transferSuccessful && !isPendingAuth) {
+            // Transfer failed immediately
+            toast.error(
+              `Transfer status: ${transferResponse.responseBody.status}. Initiating auto-reversal...`,
+            );
+            await executeAutoReversal(selectedWithdrawal, `Transfer ${transferResponse.responseBody.status}`);
+            setSubmitting(false);
+            setProcessingTransfer(false);
+            setTransferStatus("");
+            return;
+          }
 
           // Step 4: Update withdrawal request with transfer details
           setTransferStatus("Updating withdrawal status...");
 
-          const isPendingAuth =
-            transferResponse.responseBody.status === "PENDING_AUTHORIZATION";
           // console.log("Transfer response:", transferResponse)
           await updateDoc(withdrawalRef, {
             approvedBy: "Admin User", // TODO: Replace with actual admin user ID
@@ -1631,6 +1827,20 @@ export default function WithdrawalsClientPage() {
                                       {resendingOTP
                                         ? "Sending..."
                                         : "Resend OTP"}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      onClick={() =>
+                                        handleVerifyStatus(withdrawal)
+                                      }
+                                      disabled={
+                                        verifyingStatus === withdrawal.id
+                                      }
+                                    >
+                                      {verifyingStatus === withdrawal.id
+                                        ? "Checking..."
+                                        : "Verify"}
                                     </Button>
                                     <Button
                                       size="sm"
