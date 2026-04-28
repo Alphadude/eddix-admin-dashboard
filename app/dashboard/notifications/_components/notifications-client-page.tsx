@@ -18,6 +18,7 @@ import {
     Zap
 } from "lucide-react"
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { db } from "@/lib/firebase_config"
 import { collection, getDocs, query, orderBy, Timestamp, limit } from "firebase/firestore"
 import { Toaster } from "react-hot-toast"
@@ -35,6 +36,7 @@ interface Notification {
 }
 
 export function NotificationsClientPage() {
+    const router = useRouter()
     const [searchTerm, setSearchTerm] = useState("")
     const [typeFilter, setTypeFilter] = useState("all")
     const [notifications, setNotifications] = useState<Notification[]>([])
@@ -289,7 +291,27 @@ export function NotificationsClientPage() {
                                 {paginatedNotifications.map((notification) => (
                                     <div 
                                         key={notification.id} 
-                                        className="flex items-start gap-4 p-4 border rounded-xl hover:bg-accent/30 transition-all group"
+                                        onClick={() => {
+                                            switch (notification.type) {
+                                                case 'registration':
+                                                case 'activation':
+                                                    router.push("/dashboard/users")
+                                                    break
+                                                case 'savings_created':
+                                                    router.push("/dashboard/savings")
+                                                    break
+                                                case 'top_up':
+                                                case 'refund':
+                                                    router.push("/dashboard/contributions")
+                                                    break
+                                                case 'withdrawal_initiated':
+                                                    router.push("/dashboard/withdrawals")
+                                                    break
+                                                default:
+                                                    break
+                                            }
+                                        }}
+                                        className="flex items-start gap-4 p-4 border rounded-xl hover:bg-accent/50 transition-all group cursor-pointer"
                                     >
                                         <div className="mt-1 p-2 bg-background rounded-lg border group-hover:border-primary/30 transition-colors">
                                             {getIcon(notification.type)}
