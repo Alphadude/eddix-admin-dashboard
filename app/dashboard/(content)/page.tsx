@@ -64,10 +64,24 @@ export default function DashboardPage() {
 
   const fetchTotalContributions = async (): Promise<number> => {
     try {
-      const snapshot = await getDocs(collection(db, "savings"))
-      let total = 0
-      snapshot.forEach((doc) => (total += doc.data().actualAmount || 0))
-      return total
+      // 1. Fetch total savings
+      const savingsSnapshot = await getDocs(collection(db, "savings"))
+      let totalSavings = 0
+      savingsSnapshot.forEach((doc) => (totalSavings += doc.data().actualAmount || 0))
+
+      // 2. Fetch total activation fees
+      const usersQuery = query(
+        collection(db, "users"),
+        where("accountActivated", "==", true)
+      )
+      const usersSnapshot = await getDocs(usersQuery)
+      let totalActivations = 0
+      usersSnapshot.forEach((doc) => {
+        const data = doc.data()
+        totalActivations += data.activationAmount || 500
+      })
+
+      return totalSavings + totalActivations
     } catch (error) {
       console.error("Error fetching contributions:", error)
       return 0
@@ -235,6 +249,8 @@ export default function DashboardPage() {
           user: `${data.firstName || ''} ${data.lastName || ''}`.trim() || "New User",
           type: "new_user" as const,
           time: formatTimeAgo(date),
+          amount: data.accountActivated ? `₦${(data.activationAmount || 500).toLocaleString()}` : undefined,
+          status: data.accountActivated ? "activated" : "pending",
         }
       })
 
@@ -355,7 +371,9 @@ export default function DashboardPage() {
                     <div className="text-sm text-muted-foreground">
                       {activity.type === "contribution"
                         ? "Made a contribution"
-                        : "Joined the platform"}
+                        : activity.status === "activated" 
+                          ? "Activated account" 
+                          : "Joined the platform"}
                     </div>
                   </div>
 
