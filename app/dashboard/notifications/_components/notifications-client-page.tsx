@@ -14,7 +14,8 @@ import {
     ArrowUpCircle, 
     ArrowDownCircle,
     Clock,
-    Filter
+    Filter,
+    Zap
 } from "lucide-react"
 import { useState, useEffect } from "react"
 import { db } from "@/lib/firebase_config"
@@ -24,7 +25,7 @@ import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface Notification {
     id: string
-    type: 'registration' | 'savings_created' | 'top_up' | 'withdrawal_initiated'
+    type: 'registration' | 'savings_created' | 'top_up' | 'withdrawal_initiated' | 'activation'
     userId: string
     userName: string
     details: string
@@ -118,8 +119,24 @@ export function NotificationsClientPage() {
                     }
                 })
 
+                // 5. Extract Activations from Users
+                const activationsData = usersSnapshot.docs
+                    .filter(doc => doc.data().accountActivated === true && doc.data().activationDate)
+                    .map(doc => {
+                        const data = doc.data()
+                        return {
+                            id: `${doc.id}_activation`,
+                            type: 'activation' as const,
+                            userId: doc.id,
+                            userName: `${data.firstName || ''} ${data.lastName || ''}`.trim() || data.email || "Unknown User",
+                            details: `Activated account`,
+                            amount: data.activationAmount || 500,
+                            createdAt: data.activationDate as Timestamp,
+                        }
+                    })
+
                 // Combine and sort
-                const combined = [...usersData, ...savingsData, ...topUpsData, ...withdrawalsData]
+                const combined = [...usersData, ...savingsData, ...topUpsData, ...withdrawalsData, ...activationsData]
                     .filter(n => n.createdAt) // Ensure createdAt exists
                     .sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis())
 
@@ -169,6 +186,7 @@ export function NotificationsClientPage() {
             case 'savings_created': return <PiggyBank className="h-5 w-5 text-green-500" />
             case 'top_up': return <ArrowUpCircle className="h-5 w-5 text-emerald-500" />
             case 'withdrawal_initiated': return <ArrowDownCircle className="h-5 w-5 text-orange-500" />
+            case 'activation': return <Zap className="h-5 w-5 text-yellow-500" />
             default: return <Clock className="h-5 w-5 text-gray-500" />
         }
     }
@@ -179,6 +197,7 @@ export function NotificationsClientPage() {
             case 'savings_created': return <Badge variant="outline" className="text-green-600 bg-green-50">Savings Created</Badge>
             case 'top_up': return <Badge variant="outline" className="text-emerald-600 bg-emerald-50">Top-up</Badge>
             case 'withdrawal_initiated': return <Badge variant="outline" className="text-orange-600 bg-orange-50">Withdrawal</Badge>
+            case 'activation': return <Badge variant="outline" className="text-yellow-600 bg-yellow-50">Activation</Badge>
             default: return <Badge variant="outline">Action</Badge>
         }
     }
@@ -238,6 +257,7 @@ export function NotificationsClientPage() {
                                         <SelectItem value="savings_created">Savings Plans</SelectItem>
                                         <SelectItem value="top_up">Top-ups</SelectItem>
                                         <SelectItem value="withdrawal_initiated">Withdrawals</SelectItem>
+                                        <SelectItem value="activation">Activations</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </div>
