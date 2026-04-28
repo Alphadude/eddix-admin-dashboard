@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { TrendingUp, TrendingDown, Users, Clock, MoreHorizontal } from "lucide-react"
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { db } from "@/lib/firebase_config"
 import {
   collection,
@@ -51,6 +52,7 @@ const formatTimeAgo = (date: Date) => {
 /* ===================== PAGE COMPONENT ===================== */
 
 export default function DashboardPage() {
+  const router = useRouter()
   const [stats, setStats] = useState<DashboardStats>({
     totalContributions: 0,
     totalWithdrawals: 0,
@@ -354,7 +356,11 @@ export default function DashboardPage() {
                 Latest contributions and new users (updates in real-time)
               </CardDescription>
             </div>
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => router.push("/dashboard/notifications")}
+            >
               View All
             </Button>
           </CardHeader>
@@ -364,7 +370,14 @@ export default function DashboardPage() {
               recentActivity.map((activity) => (
                 <div
                   key={activity.id}
-                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent/50 transition-colors"
+                  onClick={() => {
+                    if (activity.type === "contribution") {
+                      router.push("/dashboard/contributions")
+                    } else if (activity.type === "new_user") {
+                      router.push("/dashboard/users")
+                    }
+                  }}
+                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-accent/50 transition-colors cursor-pointer"
                 >
                   <div>
                     <div className="font-medium">{activity.user}</div>
