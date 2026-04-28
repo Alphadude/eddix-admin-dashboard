@@ -400,14 +400,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
 
-                    {activity.status && (
-                      <Badge variant={
-                        activity.status === "completed" ? "default" :
-                          activity.status === "pending" ? "secondary" : "outline"
-                      }>
-                        {activity.status}
-                      </Badge>
-                    )}
+
 
                     <Button variant="ghost" size="sm">
                       <MoreHorizontal className="h-4 w-4" />
