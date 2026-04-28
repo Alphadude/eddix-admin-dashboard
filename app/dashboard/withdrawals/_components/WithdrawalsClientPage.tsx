@@ -1128,9 +1128,11 @@ export default function WithdrawalsClientPage() {
         setTransferStatus("Initiating transfer to user...");
 
         try {
+          const transferRef = selectedWithdrawal.requestedTransferRef || `W-${uuidv4()}`;
+          
           const transferResponse = await initiateSingleTransfer({
             amount: selectedWithdrawal.totalTransferableAmount,
-            reference: selectedWithdrawal.requestedTransferRef!, // Always generate unique reference
+            reference: transferRef,
             narration: selectedWithdrawal.narration || "Withdrawal payment",
             destinationBankCode: selectedWithdrawal.destinationBankCode,
             destinationAccountNumber:
@@ -1175,6 +1177,7 @@ export default function WithdrawalsClientPage() {
           await updateDoc(withdrawalRef, {
             approvedBy: "Admin User", // TODO: Replace with actual admin user ID
             updatedAt: serverTimestamp(),
+            requestedTransferRef: transferRef,
             monnifyTransferReference: transferResponse.responseBody.reference,
             monnifyTransferStatus: transferResponse.responseBody.status,
             isInitialized: isPendingAuth ? true : false,
