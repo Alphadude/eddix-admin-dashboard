@@ -413,8 +413,11 @@ export function ContributionsClientPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalToday)}
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalToday + earningsToday.activation)}
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Cont: {formatCurrency(totalToday)} • Act: {formatCurrency(earningsToday.activation)}
+                </p>
               </CardContent>
             </Card>
             <Card>
@@ -423,8 +426,11 @@ export function ContributionsClientPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalWeek)}
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalWeek + earningsWeek.activation)}
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Cont: {formatCurrency(totalWeek)} • Act: {formatCurrency(earningsWeek.activation)}
+                </p>
               </CardContent>
             </Card>
             <Card>
@@ -433,17 +439,20 @@ export function ContributionsClientPage() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalMonth)}
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalMonth + earningsMonth.activation)}
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Cont: {formatCurrency(totalMonth)} • Act: {formatCurrency(earningsMonth.activation)}
+                </p>
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Processing</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Activation Fee</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">
-                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(totalProcessing)}
+                  {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : formatCurrency(earningsLifetime.activation)}
                 </div>
               </CardContent>
             </Card>
