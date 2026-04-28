@@ -195,21 +195,24 @@ export function ContributionsClientPage() {
   const totalToday = transactions
     .filter((t) => {
       const txDate = t.createdAt?.toDate()
-      return txDate && txDate >= todayStart && t.status === "completed"
+      const isReversal = t.ref?.startsWith("REV-") || t.description?.toLowerCase().includes("reversed")
+      return txDate && txDate >= todayStart && t.status === "completed" && !isReversal
     })
     .reduce((sum, t) => sum + (t.amount || 0), 0)
 
   const totalWeek = transactions
     .filter((t) => {
       const txDate = t.createdAt?.toDate()
-      return txDate && txDate >= weekStart && t.status === "completed"
+      const isReversal = t.ref?.startsWith("REV-") || t.description?.toLowerCase().includes("reversed")
+      return txDate && txDate >= weekStart && t.status === "completed" && !isReversal
     })
     .reduce((sum, t) => sum + (t.amount || 0), 0)
 
   const totalMonth = transactions
     .filter((t) => {
       const txDate = t.createdAt?.toDate()
-      return txDate && txDate >= monthStart && t.status === "completed"
+      const isReversal = t.ref?.startsWith("REV-") || t.description?.toLowerCase().includes("reversed")
+      return txDate && txDate >= monthStart && t.status === "completed" && !isReversal
     })
     .reduce((sum, t) => sum + (t.amount || 0), 0)
 

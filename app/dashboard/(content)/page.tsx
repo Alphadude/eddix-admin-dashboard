@@ -212,6 +212,7 @@ export default function DashboardPage() {
           amount: `₦${(data.amount || 0).toLocaleString()}`,
           time: formatTimeAgo(date),
           status: data.status || "unknown",
+          isReversal: data.ref?.startsWith("REV-") || data.description?.toLowerCase().includes("reversed") || false,
         }
       })
 
@@ -383,7 +384,7 @@ export default function DashboardPage() {
                     <div className="font-medium">{activity.user}</div>
                     <div className="text-sm text-muted-foreground">
                       {activity.type === "contribution"
-                        ? "Made a contribution"
+                        ? (activity as any).isReversal ? "Refunded to savings" : "Made a contribution"
                         : activity.status === "activated" 
                           ? "Activated account" 
                           : "Joined the platform"}
