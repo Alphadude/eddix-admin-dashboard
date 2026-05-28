@@ -1,6 +1,6 @@
 "use client"
 
-import { DashboardLayout } from "@/components/dashboard-layout"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -25,7 +25,7 @@ import { Download, TrendingUp, TrendingDown, Users, DollarSign, Loader2, ArrowDo
 import { useState, useEffect } from "react"
 import { db } from "@/lib/firebase_config"
 import { collection, getDocs, query, where, Timestamp } from "firebase/firestore"
-import { toast, Toaster } from "react-hot-toast"
+import { toast } from "react-hot-toast"
 import { generatePDFReport } from "@/lib/pdfReportGenerator"
 
 
@@ -275,8 +275,6 @@ export default function ReportsClientPage() {
   }
 
   return (
-    <DashboardLayout>
-      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -566,6 +564,5 @@ export default function ReportsClientPage() {
           </Card>
         </div>
       </div>
-    </DashboardLayout>
   )
 }

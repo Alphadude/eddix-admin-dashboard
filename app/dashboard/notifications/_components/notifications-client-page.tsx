@@ -1,6 +1,6 @@
 "use client"
 
-import { DashboardLayout } from "@/components/dashboard-layout"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -21,7 +21,7 @@ import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { db } from "@/lib/firebase_config"
 import { collection, getDocs, query, orderBy, Timestamp, limit } from "firebase/firestore"
-import { Toaster } from "react-hot-toast"
+
 import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface Notification {
@@ -224,8 +224,6 @@ export function NotificationsClientPage() {
     }
 
     return (
-        <DashboardLayout>
-            <Toaster position="top-right" />
             <div className="space-y-6">
                 <div className="flex items-center justify-between">
                     <div>
@@ -357,6 +355,5 @@ export function NotificationsClientPage() {
                     </CardContent>
                 </Card>
             </div>
-        </DashboardLayout>
     )
 }

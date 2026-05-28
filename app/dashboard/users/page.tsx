@@ -1,6 +1,6 @@
 "use client"
 
-import { DashboardLayout } from "@/components/dashboard-layout"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,7 +15,7 @@ import { useState, useEffect } from "react"
 import { db } from "@/lib/firebase_config"
 import { collection, onSnapshot, query, orderBy, Timestamp, getDocs, where, limit, serverTimestamp, updateDoc, doc } from "firebase/firestore"
 import { formatDistanceToNow } from "date-fns"
-import { toast, Toaster } from "react-hot-toast"
+import { toast } from "react-hot-toast"
 import { Pagination, usePagination } from "@/components/ui/pagination"
 
 
@@ -325,8 +325,6 @@ export default function UsersPage() {
   }
 
   return (
-    <DashboardLayout>
-      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div>
@@ -690,6 +688,5 @@ export default function UsersPage() {
           </DialogContent>
         </Dialog>
       </div>
-    </DashboardLayout>
   )
 }

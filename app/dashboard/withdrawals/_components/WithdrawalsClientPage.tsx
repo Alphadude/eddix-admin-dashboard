@@ -1,6 +1,6 @@
 "use client";
 
-import { DashboardLayout } from "@/components/dashboard-layout";
+
 import {
   Card,
   CardContent,
@@ -63,7 +63,7 @@ import {
   where,
   getDoc,
 } from "firebase/firestore";
-import { toast, Toaster } from "react-hot-toast";
+import { toast } from "react-hot-toast";
 import { formatDistanceToNow } from "date-fns";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -974,7 +974,9 @@ export default function WithdrawalsClientPage() {
           monnifyTransferStatus: currentStatus,
           updatedAt: serverTimestamp(),
         });
-        toast.info(`Transfer status is currently: ${currentStatus}`);
+        toast(`Transfer status is currently: ${currentStatus}`, {
+          icon: "ℹ️",
+        });
       }
 
       await fetchWithdrawalRequests();
@@ -1496,8 +1498,6 @@ export default function WithdrawalsClientPage() {
   };
 
   return (
-    <DashboardLayout>
-      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -2579,6 +2579,5 @@ export default function WithdrawalsClientPage() {
           </DialogContent>
         </Dialog>
       </div>
-    </DashboardLayout>
   );
 }

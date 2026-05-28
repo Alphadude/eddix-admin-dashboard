@@ -1,6 +1,6 @@
 "use client"
 
-import { DashboardLayout } from "@/components/dashboard-layout"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,7 +18,7 @@ import { collection, getDocs, query, orderBy, Timestamp, where, addDoc, serverTi
 import { startOfDay, startOfWeek, startOfMonth } from "date-fns"
 import { v4 as uuidv4 } from "uuid"
 import { cn } from "@/lib/utils"
-import { toast, Toaster } from "react-hot-toast"
+import { toast } from "react-hot-toast"
 import { Pagination, usePagination } from "@/components/ui/pagination"
 
 interface Transaction {
@@ -397,8 +397,6 @@ export function ContributionsClientPage() {
   }
 
   return (
-    <DashboardLayout>
-      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div>
@@ -775,6 +773,5 @@ export function ContributionsClientPage() {
           </DialogContent>
         </Dialog>
       </div>
-    </DashboardLayout>
   )
 }

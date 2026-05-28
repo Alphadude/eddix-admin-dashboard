@@ -1,6 +1,6 @@
 "use client"
 
-import { DashboardLayout } from "@/components/dashboard-layout"
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -34,7 +34,7 @@ import {
   getDocs,
   Timestamp
 } from "firebase/firestore"
-import { toast, Toaster } from "react-hot-toast"
+import { toast } from "react-hot-toast"
 import { auth } from "@/lib/firebase_config"
 import { createUserWithEmailAndPassword, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "firebase/auth"
 
@@ -433,8 +433,6 @@ export default function ClientSettingsPage() {
   }
 
   return (
-    <DashboardLayout>
-      <Toaster position="top-right" />
       <div className="space-y-6">
         {/* Header */}
         <div>
@@ -885,6 +883,5 @@ export default function ClientSettingsPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </DashboardLayout>
   )
 }

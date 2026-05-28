@@ -7,8 +7,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Mail, ArrowLeft, CheckCircle2 } from "lucide-react"
+import { Mail, ArrowLeft, CheckCircle2, Loader2 } from "lucide-react"
 import Link from "next/link"
+import { auth } from "@/lib/firebase_config"
+import { sendPasswordResetEmail } from "firebase/auth"
 
 export default function ForgotPasswordClient() {
   const [email, setEmail] = useState("")
@@ -21,11 +23,23 @@ export default function ForgotPasswordClient() {
     setLoading(true)
     setError("")
 
-    // Simulate password reset email API call
-    setTimeout(() => {
+    try {
+      await sendPasswordResetEmail(auth, email)
       setSuccess(true)
+    } catch (err: any) {
+      console.error("Error sending reset email:", err)
+      
+      // Handle specific Firebase errors
+      if (err.code === "auth/user-not-found") {
+        setError("No account found with this email address.")
+      } else if (err.code === "auth/invalid-email") {
+        setError("Please enter a valid email address.")
+      } else {
+        setError(err.message || "Failed to send reset email. Please try again.")
+      }
+    } finally {
       setLoading(false)
-    }, 1500)
+    }
   }
 
   if (success) {
@@ -99,11 +113,19 @@ export default function ForgotPasswordClient() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                disabled={loading}
               />
             </div>
 
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Sending..." : "Send Reset Instructions"}
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                "Send Reset Instructions"
+              )}
             </Button>
 
             <Link href="/login" className="block">

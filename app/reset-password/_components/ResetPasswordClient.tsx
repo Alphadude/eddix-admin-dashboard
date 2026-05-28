@@ -7,9 +7,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Eye, EyeOff, Lock, CheckCircle2 } from "lucide-react"
+import { Eye, EyeOff, Lock, CheckCircle2, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
+import { auth } from "@/lib/firebase_config"
+import { confirmPasswordReset } from "firebase/auth"
 
 export default function ResetPasswordClient() {
   const [showPassword, setShowPassword] = useState(false)
@@ -38,22 +40,41 @@ export default function ResetPasswordClient() {
     }
 
     // Validate password strength
-    if (formData.password.length < 8) {
-      setError("Password must be at least 8 characters long")
+    if (formData.password.length < 6) {
+      setError("Password must be at least 6 characters long")
       setLoading(false)
       return
     }
 
-    // Simulate password reset API call
-    setTimeout(() => {
-      setSuccess(true)
-      setLoading(false)
+    try {
+      if (!token) {
+        throw new Error("Invalid or expired reset link. Please request a new password reset.")
+      }
 
-      // Redirect to login after 2 seconds
+      await confirmPasswordReset(auth, token, formData.password)
+      
+      setSuccess(true)
+
+      // Redirect to login after 3 seconds
       setTimeout(() => {
         router.push("/login")
-      }, 2000)
-    }, 1500)
+      }, 3000)
+    } catch (err: any) {
+      console.error("Error resetting password:", err)
+      
+      // Handle specific Firebase errors
+      if (err.code === "auth/expired-action-code") {
+        setError("The reset link has expired. Please request a new one.")
+      } else if (err.code === "auth/invalid-action-code") {
+        setError("The reset link is invalid. Please request a new one.")
+      } else if (err.code === "auth/weak-password") {
+        setError("The new password is too weak.")
+      } else {
+        setError(err.message || "Failed to reset password. Please try again.")
+      }
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (success) {
@@ -116,7 +137,7 @@ export default function ResetPasswordClient() {
                   value={formData.password}
                   onChange={(e) => setFormData((prev) => ({ ...prev, password: e.target.value }))}
                   required
-                  disabled={!token}
+                  disabled={!token || loading}
                 />
                 <Button
                   type="button"
@@ -124,6 +145,7 @@ export default function ResetPasswordClient() {
                   size="sm"
                   className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
                   onClick={() => setShowPassword(!showPassword)}
+                  disabled={!token || loading}
                 >
                   {showPassword ? (
                     <EyeOff className="h-4 w-4 text-muted-foreground" />
@@ -132,7 +154,7 @@ export default function ResetPasswordClient() {
                   )}
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">Must be at least 8 characters long</p>
+              <p className="text-xs text-muted-foreground">Must be at least 6 characters long</p>
             </div>
 
             <div className="space-y-2">
@@ -145,7 +167,7 @@ export default function ResetPasswordClient() {
                   value={formData.confirmPassword}
                   onChange={(e) => setFormData((prev) => ({ ...prev, confirmPassword: e.target.value }))}
                   required
-                  disabled={!token}
+                  disabled={!token || loading}
                 />
                 <Button
                   type="button"
@@ -153,6 +175,7 @@ export default function ResetPasswordClient() {
                   size="sm"
                   className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  disabled={!token || loading}
                 >
                   {showConfirmPassword ? (
                     <EyeOff className="h-4 w-4 text-muted-foreground" />
@@ -164,7 +187,14 @@ export default function ResetPasswordClient() {
             </div>
 
             <Button type="submit" className="w-full" disabled={loading || !token}>
-              {loading ? "Resetting..." : "Reset Password"}
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Resetting...
+                </>
+              ) : (
+                "Reset Password"
+              )}
             </Button>
 
             <Link href="/login" className="block">

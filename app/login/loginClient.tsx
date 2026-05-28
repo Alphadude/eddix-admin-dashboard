@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Eye, EyeOff, Loader2 } from "lucide-react"
 import { useRouter } from "next/navigation"
+import Link from "next/link"
 import { useAuth } from "@/contexts/auth-context"
 
 export default function LoginPageClient() {
@@ -111,6 +112,14 @@ export default function LoginPageClient() {
                   )}
                 </Button>
               </div>
+            </div>
+            <div className="flex items-center justify-end">
+              <Link
+                href="/forgot-password"
+                className="text-sm font-medium text-primary hover:underline underline-offset-4"
+              >
+                Forgot Password?
+              </Link>
             </div>
 
             <Button type="submit" className="w-full" disabled={loading}>

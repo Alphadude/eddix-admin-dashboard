@@ -5,6 +5,7 @@ import { GeistMono } from "geist/font/mono"
 import { Analytics } from "@vercel/analytics/next"
 import { Suspense } from "react"
 import { AuthProvider } from "@/contexts/auth-context"
+import { Toaster } from "react-hot-toast"
 import "./globals.css"
 
 // Force all pages to be rendered dynamically (at request time) rather than
@@ -29,6 +30,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`font-sans ${GeistSans.variable} ${GeistMono.variable}`}>
         <AuthProvider>
+          <Toaster position="top-right" />
           <Suspense fallback={null}>{children}</Suspense>
         </AuthProvider>
         <Analytics />
